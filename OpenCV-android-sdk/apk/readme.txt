@@ -12,9 +12,11 @@ manually using adb tool:
 
     adb install <path-to-OpenCV-sdk>/apk/OpenCV_<version>_Manager_<app_version>_<platform>.apk
 
+
+
 Example: OpenCV_3.4.3-dev_Manager_3.43_armeabi-v7a.apk
 
-Use the list of platforms below to determine proper OpenCV Manager package for your device:
+ Use the list of platforms below to determine proper OpenCV Manager package for your device:
 
 - armeabi (ARMv5, ARMv6)
 - armeabi-v7a (ARMv7-A + NEON)

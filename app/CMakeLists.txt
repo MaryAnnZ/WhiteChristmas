@@ -3,8 +3,8 @@
 # value of 3.4.0 or lower.
 set(CMAKE_C_COMPILER C:\\Users\\rebeb\\AppData\\Local\\Android\\sdk\\ndk-bundle\\toolchains\\x86-4.9\\prebuilt\\windows-x86_64\\bin\\i686-linux-android-gcc)
 #Added 2 path definitions to support 20160825 additions
-set(pathToProject C:\\Users\\rebeb\\Documents\\TU_Wien\\18WS\\CVSP\\UE)
-set(pathToOpenCv C:\\Users\\rebeb\\Documents\\TU_Wien\\18WS\\CVSP\\UE\\OpenCV-android-sdk)
+set(pathToProject D:\\DOKUMENTE\\UNI\\MA\\11.WS18\\CVUE\\WhiteChristmas)
+set(pathToOpenCv D:\\DOKUMENTE\\UNI\\MA\\11.WS18\\CVUE\\WhiteChristmas\\OpenCV-android-sdk)
 
 #Added by the IDE on project create
 cmake_minimum_required(VERSION 3.4.1)
@@ -29,5 +29,4 @@ set_target_properties(lib_opencv PROPERTIES IMPORTED_LOCATION ${pathToProject}/a
 find_library( log-lib log )
 
 #Added by IDE on project create, Removed and replace with additional parameter suggested by Bruno Alexandre Krinski 20160825
-#target_link_libraries( native-lib $/{log-lib} )
-target_link_libraries( native-lib $\\{log-lib} lib_opencv)
+target_link_libraries( native-lib ${log-lib} lib_opencv)

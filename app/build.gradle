@@ -19,7 +19,7 @@ android {
 
     sourceSets {
         main {
-            jniLibs.srcDirs = ['C:/Users/rebeb/Documents/TU_Wien/18WS/CVSP/UE/app/src/main/jniLibs/']
+            jniLibs.srcDirs = ['D:/DOKUMENTE/UNI/MA/11.WS18/WhiteChristmas/app/src/main/jniLibs']
         }
     }
 
