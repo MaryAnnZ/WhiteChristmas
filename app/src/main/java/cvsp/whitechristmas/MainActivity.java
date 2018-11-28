@@ -54,6 +54,7 @@ import android.view.SurfaceView;
 
 
 
+
 public class MainActivity extends Activity implements OnTouchListener, CvCameraViewListener2 {
 
     private static final String  TAG              = "MainActivity";
@@ -64,7 +65,7 @@ public class MainActivity extends Activity implements OnTouchListener, CvCameraV
 
     private CameraBridgeViewBase mOpenCvCameraView;
 
-
+    private OpencvCalls opencvCalls;
 
     private BaseLoaderCallback  mLoaderCallback = new BaseLoaderCallback(this) {
 
@@ -104,7 +105,7 @@ public class MainActivity extends Activity implements OnTouchListener, CvCameraV
     public MainActivity() {
 
         Log.i(TAG, "Instantiated new " + this.getClass());
-
+        System.loadLibrary("native-lib");
     }
 
 
@@ -221,6 +222,7 @@ public class MainActivity extends Activity implements OnTouchListener, CvCameraV
     public Mat onCameraFrame(CvCameraViewFrame inputFrame) {
 
         mRgba = inputFrame.rgba();
+        opencvCalls.faceDetection(mRgba.getNativeObjAddr());
         return mRgba;
 
     }
