@@ -5,6 +5,7 @@
 #include <android/log.h>
 #include "opencv2/opencv.hpp"
 #include "opencv2/video/tracking.hpp"
+#include "opencv2/core/core.hpp"
 //#include "opencv2/objdetect/objdetect.hpp"
 
 
@@ -23,12 +24,55 @@ bool faceCascadedLoaded = false;
 cv::CascadeClassifier face_cascade;
 cv::Mat prevFrame, prevprevFrame;
 int frameCounter = 0;
+std::vector< cv::Point2f> keypoints;
 extern "C"
 JNIEXPORT void JNICALL
 Java_cvsp_whitechristmas_OpencvCalls_faceDetection(JNIEnv *env, jclass type, jlong addrRgba) {
 
+    cv::Mat &frame = *(cv::Mat *) addrRgba;
+    cv::Mat frame_gray;
 
-        cv::Mat &frame = *(cv::Mat *) addrRgba;
+    cvtColor(frame, frame_gray, cv::COLOR_BGR2GRAY);
+    cv::equalizeHist(frame_gray, frame_gray);
+    cv::rotate(frame_gray, frame_gray, cv::ROTATE_90_CLOCKWISE);
+
+    if (frameCounter > 1) { //do tracking
+        __android_log_print(ANDROID_LOG_INFO, "OpenCVCalls", "Track");
+        if (keypoints.size() > 0) {
+            std::vector<cv::Point2f> newKeypoints;
+            std::vector<uchar> status;
+            std::vector<float> error;
+            __android_log_print(ANDROID_LOG_INFO, "OpenCVCalls", "Am I hanging there?");
+
+
+            cv::calcOpticalFlowPyrLK(prevprevFrame, prevFrame, keypoints, newKeypoints, status,
+                                     error);
+            __android_log_print(ANDROID_LOG_INFO, "OpenCVCalls", "No I dont");
+            keypoints.clear();
+            for (unsigned int i = 0; i < newKeypoints.size(); ++i) {
+                uchar c = status[i] ;
+                __android_log_print(ANDROID_LOG_INFO, "OpenCVCalls", "%d", c);
+                if (c == 1) {
+                    keypoints.push_back(newKeypoints[i]);
+                    __android_log_print(ANDROID_LOG_INFO, "OpenCVCalls", "rendering points");
+                    ellipse(frame, cv::Point(newKeypoints[i].y, frame.rows - newKeypoints[i].x), cv::Size(5, 5), 0, 0, 360,
+                        cv::Scalar(255, 0, 0), 4, 8, 0);
+                } else if (c == 0) {
+                    __android_log_print(ANDROID_LOG_INFO, "OpenCVCalls", "status is 0");
+                }
+            }
+            newKeypoints.clear();
+            prevprevFrame = prevFrame;
+            prevFrame = frame_gray;
+
+        }
+        if (frameCounter > 11) {
+            frameCounter = 0;
+            return;
+        }
+    } else { //do detection
+        __android_log_print(ANDROID_LOG_INFO, "OpenCVCalls", "Detect");
+
 
         if (!faceCascadedLoaded) {
             if (!face_cascade.load(face_cascade_name)) {
@@ -38,29 +82,49 @@ Java_cvsp_whitechristmas_OpencvCalls_faceDetection(JNIEnv *env, jclass type, jlo
                 faceCascadedLoaded = true;
             }
         }
-        cv::Mat frame_gray;
 
-        cvtColor(frame, frame_gray, CV_BGR2GRAY);
-        cv::equalizeHist(frame_gray, frame_gray);
-        cv::rotate(frame_gray, frame_gray, cv::ROTATE_90_CLOCKWISE);
 
         if (frameCounter == 0) {
-            prevprevFrame = frame;
+            prevprevFrame = frame_gray;
         } else if (frameCounter == 1) {
-            prevFrame = frame;
+            prevFrame = frame_gray;
         }
         //-- Detect faces
         face_cascade.detectMultiScale(frame_gray, faces, 1.1, 2, 0 | CV_HAAR_SCALE_IMAGE,
                                       cv::Size(30, 30));
 
-        for (size_t i = 0; i < faces.size(); i++) {
-            cv::Point center(faces[i].y + faces[i].height * 0.5,
-                             frame.rows - faces[i].x - faces[i].width * 0.5);
-            ellipse(frame, center, cv::Size(faces[i].width * 0.5, faces[i].height * 0.5), 0, 0, 360,
-                    cv::Scalar(255, 0, 255), 4, 8, 0);
+        std::vector<cv::Point2f> tmpKeypoints;
+        if (frameCounter == 0) {
+            keypoints.clear();
+            __android_log_print(ANDROID_LOG_INFO, "Keypoints", "Finding keypoints");
+//                cv::Mat mask = cv::Mat(frame_gray.rows, frame_gray.cols, CV_8UC1, 0);
+//                mask(currRect) = 1;
 
+            cv::goodFeaturesToTrack(frame_gray, tmpKeypoints, 5, 0.2, 0.8);
         }
 
+        for (size_t i = 0; i < faces.size(); i++) {
+            cv::Rect currRect = faces[i];
+            cv::Point center(currRect.y + currRect.height * 0.5,
+                             frame.rows - currRect.x - currRect.width * 0.5);
+            ellipse(frame, center, cv::Size(currRect.width * 0.5, currRect.height * 0.5), 0, 0, 360,
+                    cv::Scalar(255, 0, 255), 4, 8, 0);
+
+            for (unsigned int i = 0; i < tmpKeypoints.size(); ++i) {
+                cv::Point currPoint = tmpKeypoints[i];
+                if (currPoint.x > currRect.x && currPoint.x < currRect.x + currRect.width && currPoint.y > currRect.y && currPoint.y < currRect.y + currRect.height) {
+                    keypoints.push_back(currPoint);
+                }
+            }
+            if (keypoints.size()>0) {
+                __android_log_print(ANDROID_LOG_INFO, "OpenCVCalls", "Some keypoints found");
+            } else {
+                __android_log_print(ANDROID_LOG_INFO, "OpenCVCalls", "No keypoints found");
+
+            };
+        }
+    }
+    frameCounter++;
 }
 
 extern "C"
