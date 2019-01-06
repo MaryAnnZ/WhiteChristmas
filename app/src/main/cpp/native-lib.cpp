@@ -22,6 +22,7 @@ Java_cvsp_whitechristmas_MainActivity_stringFromJNI(
 cv::Point convert(int x, int y, cv::Mat frame);
 void doDeidentification(cv::Mat frame);
 bool isInEllipse(int x, int y, cv::Rect rect, cv::Point center) ;
+std::string type2str(int type);
 
 std::vector<cv::Rect> faces;
 cv::String face_cascade_name = "/storage/emulated/0/Download/haarcascade_frontalface_default.xml";
@@ -35,7 +36,7 @@ extern "C"
 JNIEXPORT void JNICALL
 Java_cvsp_whitechristmas_OpencvCalls_faceDetection(JNIEnv *env, jclass type, jlong addrRgba) {
 
-    cv::Mat &frame = *(cv::Mat *) addrRgba;
+    cv::Mat &frame = *(cv::Mat *) addrRgba;     //8UC4
     cv::Mat frame_gray;
 
     cvtColor(frame, frame_gray, cv::COLOR_BGR2GRAY);
@@ -146,6 +147,7 @@ Java_cvsp_whitechristmas_OpencvCalls_faceDetection(JNIEnv *env, jclass type, jlo
 
     doDeidentification(frame);
 
+
     frameCounter++;
 }
 
@@ -156,38 +158,60 @@ cv::Point convert(int x, int y, cv::Mat frame) {
     return newPoint;
 }
 
-bool isInEllipse(int x, int y, cv::Rect rect, cv::Point center) {
-    return (pow((x - center.x), 2) / pow(rect.width, 2))  + (pow((y - center.y), 2) / pow(rect.height, 2)) <1;
-}
-
 void doDeidentification(cv::Mat frame) {
     for (size_t i = 0; i < faces.size(); i++) {
         cv::Rect currRect = faces[i];
         cv::Point center(currRect.x + currRect.width * 0.5, currRect.y + currRect.height * 0.5);
+        //cv::Mat currentFace = image(currRect);
+
+        //        medianBlur(src,dst,i);
 
         for(int y = currRect.y; y < currRect.y+currRect.height; y++)
         {
            for(int x = currRect.x; x < currRect.x+currRect.width; x++)
             {
-               if (isInEllipse(x,y,currRect,center)) {
-
+               //if point is in the ellipse of rectancle, deindentificate!
+               //if ((pow((x - center.x), 2) / pow(currRect.width, 2))  + (pow((y - center.y), 2) / pow(currRect.height, 2)) <1) {
                 cv::Point transPoint = convert(x, y, frame);
 
                int grey = rand()%255 + 10;
-               cv::Vec3f intensity = frame.at<cv::Vec3f>(transPoint);
-               intensity.val[0] = rand() % 10 + grey;
-               intensity.val[1]= rand() % 10 + grey;
-               intensity.val[2]= rand() % 10 + grey;
+               cv::Scalar intensity = frame.at<cv::Scalar>(transPoint);
+               intensity.val[0] = (int)rand()%5+(grey);
+               intensity.val[1]= (int)rand()%5+(grey);
+               intensity.val[2]= (int)rand()%5+(grey);
 
-                frame.at<cv::Vec3b>(transPoint) = intensity;
-                }
+                frame.at<cv::Vec4b>(transPoint) = cv::Vec4b(rand()%255, rand()%255, rand()%255,1);
             }
         }
+
         //for debugging
-        ellipse(frame, convert(center.x,center.y,frame), cv::Size(currRect.width * 0.5, currRect.height * 0.5), 0, 0, 360,cv::Scalar(rand()%255, rand()%255, rand()%255),CV_FILLED);
+        //ellipse(frame, convert(center.x,center.y,frame), cv::Size(currRect.height * 0.5, currRect.width * 0.5), 0, 0, 360,cv::Scalar(rand()%255, rand()%255, rand()%255),CV_FILLED);
     }
 
 
+}
+
+std::string type2str(int type) {
+  std::string r;
+
+  uchar depth = type & CV_MAT_DEPTH_MASK;
+  uchar chans = 1 + (type >> CV_CN_SHIFT);
+
+  switch ( depth ) {
+    case CV_8U:  r = "8U"; break;
+    case CV_8S:  r = "8S"; break;
+    case CV_16U: r = "16U"; break;
+    case CV_16S: r = "16S"; break;
+    case CV_32S: r = "32S"; break;
+    case CV_32F: r = "32F"; break;
+    case CV_64F: r = "64F"; break;
+    default:     r = "User"; break;
+  }
+
+  r += "C";
+  r += (chans+'0');
+
+  return r;
 }
 
 extern "C"
