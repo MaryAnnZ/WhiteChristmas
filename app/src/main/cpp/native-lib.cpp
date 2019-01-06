@@ -2,6 +2,7 @@
 #include <string>
 #include <iostream>
 #include <fstream>
+#include <cmath>
 #include <android/log.h>
 #include "opencv2/opencv.hpp"
 #include "opencv2/video/tracking.hpp"
@@ -17,6 +18,10 @@ Java_cvsp_whitechristmas_MainActivity_stringFromJNI(
     return env->NewStringUTF(hello.c_str());
 }
 
+//for converting from android frame to usable one
+cv::Point convert(int x, int y, cv::Mat frame);
+void doDeidentification(cv::Mat frame);
+bool isInEllipse(int x, int y, cv::Rect rect, cv::Point center) ;
 
 std::vector<cv::Rect> faces;
 cv::String face_cascade_name = "/storage/emulated/0/Download/haarcascade_frontalface_default.xml";
@@ -25,6 +30,7 @@ cv::CascadeClassifier face_cascade;
 cv::Mat prevFrame, prevprevFrame;
 int frameCounter = 0;
 std::vector< cv::Point2f> keypoints;
+
 extern "C"
 JNIEXPORT void JNICALL
 Java_cvsp_whitechristmas_OpencvCalls_faceDetection(JNIEnv *env, jclass type, jlong addrRgba) {
@@ -83,7 +89,6 @@ Java_cvsp_whitechristmas_OpencvCalls_faceDetection(JNIEnv *env, jclass type, jlo
             }
         }
 
-
         if (frameCounter == 0) {
             prevprevFrame = frame_gray;
         } else if (frameCounter == 1) {
@@ -103,12 +108,26 @@ Java_cvsp_whitechristmas_OpencvCalls_faceDetection(JNIEnv *env, jclass type, jlo
             cv::goodFeaturesToTrack(frame_gray, tmpKeypoints, 5, 0.2, 0.8);
         }
 
+        //for ( int x = 0; x < frame_gray.rows; x++ )
+        //{
+        //    for ( int y = 0; y < frame_gray.cols; y++ )
+        //    {
+        //        //transform because of weird android bug
+        //        cv::Point transPoint = convert(x,y,frame);
+        //        if (transPoint.x>=0 && transPoint.x<frame.rows && transPoint.y>=0 && transPoint.y<frame.cols) {
+        //            frame.at<cv::Vec3b>(transPoint) = frame_gray.at<cv::Vec3b>(cv::Point(x,y));
+        //        }
+        //    }
+        //}
+
+        __android_log_print(ANDROID_LOG_INFO, "OpenCVCalls", "Faces Found: ");
+        __android_log_print(ANDROID_LOG_INFO, "OpenCVCalls", "%d", faces.size());
         for (size_t i = 0; i < faces.size(); i++) {
+
             cv::Rect currRect = faces[i];
-            cv::Point center(currRect.y + currRect.height * 0.5,
-                             frame.rows - currRect.x - currRect.width * 0.5);
-            ellipse(frame, center, cv::Size(currRect.width * 0.5, currRect.height * 0.5), 0, 0, 360,
-                    cv::Scalar(255, 0, 255), 4, 8, 0);
+            cv::Point center(currRect.y + currRect.height * 0.5, frame.rows - currRect.x - currRect.width * 0.5);
+
+
 
             for (unsigned int i = 0; i < tmpKeypoints.size(); ++i) {
                 cv::Point currPoint = tmpKeypoints[i];
@@ -124,7 +143,51 @@ Java_cvsp_whitechristmas_OpencvCalls_faceDetection(JNIEnv *env, jclass type, jlo
             };
         }
     }
+
+    doDeidentification(frame);
+
     frameCounter++;
+}
+
+cv::Point convert(int x, int y, cv::Mat frame) {
+    cv::Point newPoint = cv::Point(0,0);
+    newPoint.x  = y;
+    newPoint.y  = frame.rows - x;
+    return newPoint;
+}
+
+bool isInEllipse(int x, int y, cv::Rect rect, cv::Point center) {
+    return (pow((x - center.x), 2) / pow(rect.width, 2))  + (pow((y - center.y), 2) / pow(rect.height, 2)) <1;
+}
+
+void doDeidentification(cv::Mat frame) {
+    for (size_t i = 0; i < faces.size(); i++) {
+        cv::Rect currRect = faces[i];
+        cv::Point center(currRect.x + currRect.width * 0.5, currRect.y + currRect.height * 0.5);
+
+        for(int y = currRect.y; y < currRect.y+currRect.height; y++)
+        {
+           for(int x = currRect.x; x < currRect.x+currRect.width; x++)
+            {
+               if (isInEllipse(x,y,currRect,center)) {
+
+                cv::Point transPoint = convert(x, y, frame);
+
+               int grey = rand()%255 + 10;
+               cv::Vec3f intensity = frame.at<cv::Vec3f>(transPoint);
+               intensity.val[0] = rand() % 10 + grey;
+               intensity.val[1]= rand() % 10 + grey;
+               intensity.val[2]= rand() % 10 + grey;
+
+                frame.at<cv::Vec3b>(transPoint) = intensity;
+                }
+            }
+        }
+        //for debugging
+        ellipse(frame, convert(center.x,center.y,frame), cv::Size(currRect.width * 0.5, currRect.height * 0.5), 0, 0, 360,cv::Scalar(rand()%255, rand()%255, rand()%255),CV_FILLED);
+    }
+
+
 }
 
 extern "C"
