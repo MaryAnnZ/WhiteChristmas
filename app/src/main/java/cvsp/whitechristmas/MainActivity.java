@@ -146,7 +146,7 @@ public class MainActivity extends Activity implements OnTouchListener, CvCameraV
 
 
     public boolean onTouch(View v, MotionEvent event) {
-
+        OpencvCalls.setFaceLocation((int) event.getX(), (int) event.getY());
         return false; // don't need subsequent touch events
     }
 

@@ -30,7 +30,6 @@ bool faceCascadedLoaded = false;
 cv::CascadeClassifier face_cascade;
 cv::Mat prevFrame;
 cv::CascadeClassifier eyes_cascade;
-int frameCounter;
 
 std::vector<std::vector<cv::Point2f>> keypoints;
 std::vector<int> countKeypointsPerFace;
@@ -46,6 +45,12 @@ float faceDetectionTime = 0.0;
 int faceDetectionCalls = 0;
 float keypointFindingTime = 0.0;
 int keypointFindingCalls = 0;
+
+int faceLocationX = -1;
+int faceLocationY = -1;
+int customFaceBBHeight = -1;
+int customFaceMaxX = -1;
+int customFaceMaxY = -1;
 extern "C"
 JNIEXPORT void JNICALL
 Java_cvsp_whitechristmas_OpencvCalls_faceDetection(JNIEnv *env, jclass type, jlong addrRgba) {
@@ -59,12 +64,18 @@ Java_cvsp_whitechristmas_OpencvCalls_faceDetection(JNIEnv *env, jclass type, jlo
     cvtColor(frame_rot, frame_gray, cv::COLOR_BGR2GRAY);
     cv::equalizeHist(frame_gray, frame_gray);
 
+    if (customFaceBBHeight == -1) {
+        customFaceBBHeight = (int)((float) frame_gray.rows * 0.15);
+        customFaceMaxX = frame_gray.cols - customFaceBBHeight;
+        customFaceMaxY = frame_gray.rows - customFaceBBHeight;
+    }
+
 
     auto done = std::chrono::high_resolution_clock::now();
     preprocessTime += std::chrono::duration_cast<std::chrono::milliseconds>(done - started).count();
     preprocessCalls++;
 
-    if (dumpedKeypoints < 0.15) { //do tracking
+    if (dumpedKeypoints < 0.15 && faceLocationX == -1) { //do tracking
         __android_log_print(ANDROID_LOG_INFO, "OpenCVCalls", "Track");
 
         std::vector<cv::Point2f> newKeypoints;
@@ -131,9 +142,6 @@ Java_cvsp_whitechristmas_OpencvCalls_faceDetection(JNIEnv *env, jclass type, jlo
         keypoints=keypointsToSave;
         prevFrame = frame_gray.clone();
 
-
-
-
     } else { //do detection
         __android_log_print(ANDROID_LOG_INFO, "OpenCVCalls", "Detect");
         countKeypointsPerFace.clear();
@@ -159,17 +167,33 @@ Java_cvsp_whitechristmas_OpencvCalls_faceDetection(JNIEnv *env, jclass type, jlo
         faceDetectionTime += std::chrono::duration_cast<std::chrono::milliseconds>(done - started).count();
         faceDetectionCalls++;
 
-        //for ( int x = 0; x < frame_gray.rows; x++ )
-        //{
-        //    for ( int y = 0; y < frame_gray.cols; y++ )
-        //    {
-        //        //transform because of weird android bug
-        //        cv::Point transPoint = convert(x,y,frame);
-        //        if (transPoint.x>=0 && transPoint.x<frame.rows && transPoint.y>=0 && transPoint.y<frame.cols) {
-        //            frame.at<cv::Vec3b>(transPoint) = frame_gray.at<cv::Vec3b>(cv::Point(x,y));
-        //        }
-        //    }
-        //}
+        //get the only face which is at the point
+        bool faceFound = false;
+        if (faceLocationX != -1 && faceLocationY != -1) {
+            for (unsigned int i = 0; i < faces.size(); ++i) {
+                cv::Rect face = cv::Rect(faces[i]);
+                if (face.x < faceLocationX && faceLocationX < (face.x + face.width) && face.y < faceLocationY && faceLocationY < (face.y + face.height)) {
+                    faces.clear();
+                    faces.push_back(face);
+                    faceLocationX = -1;
+                    faceLocationY = -1;
+                    faceFound = true;
+                    break;
+                }
+            }
+            //no face were found at the given location
+            if (!faceFound) {
+                faces.clear();
+                int x = std::min(customFaceMaxX,
+                                 std::max(0, (faceLocationX - (customFaceBBHeight / 2))));
+                int y = std::min(customFaceMaxY,
+                                 std::max(0, (faceLocationY - (customFaceBBHeight / 2))));
+                cv::Rect face = cv::Rect(x, y, customFaceBBHeight, customFaceBBHeight);
+                faces.push_back(face);
+                faceLocationX = -1;
+                faceLocationY = -1;
+            }
+        }
 
         std::vector<cv::Point2f> tmpKeypoints;
         __android_log_print(ANDROID_LOG_INFO, "OpenCVCalls", "Faces Found: ");
@@ -189,11 +213,9 @@ Java_cvsp_whitechristmas_OpencvCalls_faceDetection(JNIEnv *env, jclass type, jlo
             //cv::Mat faceROI = frame_gray(currRect);
             //eyes_cascade.detectMultiScale( faceROI, eyes, 1.1, 2, 0 |CV_HAAR_SCALE_IMAGE, cv::Size(30, 30) );
 
-                __android_log_print(ANDROID_LOG_INFO, "Keypoints", "Finding keypoints");
             __android_log_print(ANDROID_LOG_INFO, "Keypoints", "Finding keypoints");
             cv::Mat mask = cv::Mat(frame_gray.rows, frame_gray.cols, CV_8UC1, (uchar) 0);
             mask(currRect) = 1;
-
 
             cv::goodFeaturesToTrack(frame_gray, tmpKeypoints, 100, 0.2, 0.2, mask);
             //render goodFeaturePoints
@@ -202,7 +224,6 @@ Java_cvsp_whitechristmas_OpencvCalls_faceDetection(JNIEnv *env, jclass type, jlo
                         cv::Size(5, 5), 0, 0, 360,
                         cv::Scalar(255, 0, 0), 4, 8, 0);
             }
-
             keypoints.push_back(tmpKeypoints);
 
 
@@ -213,15 +234,6 @@ Java_cvsp_whitechristmas_OpencvCalls_faceDetection(JNIEnv *env, jclass type, jlo
             } else {
                 __android_log_print(ANDROID_LOG_INFO, "OpenCVCalls", "No keypoints found");
             };
-
-            //render keypoints
-//            for (unsigned int i = 0; i < keypoints.size(); i++) {
-//                for (unsigned int k = 0; k < keypoints[i].size(); k++) {
-//                    ellipse(frame, cv::Point(keypoints[i][k].y, frame.rows - keypoints[i][k].x),
-//                            cv::Size(5, 5), 0, 0, 360,
-//                            cv::Scalar(255, 0, 0), 4, 8, 0);
-//                }
-//            }
         }
         done = std::chrono::high_resolution_clock::now();
         keypointFindingTime += std::chrono::duration_cast<std::chrono::milliseconds>(done - started).count();
@@ -250,7 +262,7 @@ Java_cvsp_whitechristmas_OpencvCalls_faceDetection(JNIEnv *env, jclass type, jlo
 //                cv::Scalar(0, 255, 0), 4, 8, 0);
 //    }
 
-    doDeidentification(frame,frame_rot);
+//    doDeidentification(frame,frame_rot);
 }
 
 void convert(int x, int y, cv::Mat frame, cv::Point& oldPoint) {
@@ -376,4 +388,14 @@ Java_cvsp_whitechristmas_OpencvCalls_getFaces__J(JNIEnv *env, jclass type, jlong
         env->SetObjectArrayElement(detectedFaces, i, rect);
     }
     return detectedFaces;
+}
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_cvsp_whitechristmas_OpencvCalls_setFaceLocation(JNIEnv *env, jclass type, jint x, jint y) {
+    if (prevFrame.empty()) {
+        return;
+    }
+    faceLocationY = std::max(0, x - 150);
+    faceLocationX = prevFrame.cols - y;
 }
