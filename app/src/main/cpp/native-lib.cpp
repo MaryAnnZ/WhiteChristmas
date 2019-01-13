@@ -36,6 +36,17 @@ cv::Mat prevFrame;
 std::vector<std::vector<cv::Point2f>> keypoints;
 std::vector<int> countKeypointsPerFace;
 float dumpedKeypoints = 1.0;
+
+float preprocessTime = 0.0;
+int preprocessCalls = 0;
+float keypointTrackingTime = 0.0;
+int keypointTrackingCalls = 0;
+float evaluateKeypointsTime = 0.0;
+int evaluateKeypointsCalls = 0;
+float faceDetectionTime = 0.0;
+int faceDetectionCalls = 0;
+float keypointFindingTime = 0.0;
+int keypointFindingCalls = 0;
 extern "C"
 JNIEXPORT void JNICALL
 Java_cvsp_whitechristmas_OpencvCalls_faceDetection(JNIEnv *env, jclass type, jlong addrRgba) {
@@ -47,9 +58,8 @@ Java_cvsp_whitechristmas_OpencvCalls_faceDetection(JNIEnv *env, jclass type, jlo
     cv::equalizeHist(frame_gray, frame_gray);
     cv::rotate(frame_gray, frame_gray, cv::ROTATE_90_CLOCKWISE);
     auto done = std::chrono::high_resolution_clock::now();
-    float time = std::chrono::duration_cast<std::chrono::milliseconds>(done - started).count();
-    __android_log_print(ANDROID_LOG_INFO, "Timer", "image processing");
-    __android_log_print(ANDROID_LOG_INFO, "Timer", "%f", time);
+    preprocessTime += std::chrono::duration_cast<std::chrono::milliseconds>(done - started).count();
+    preprocessCalls++;
 
     if (dumpedKeypoints < 0.15) { //do tracking
         __android_log_print(ANDROID_LOG_INFO, "OpenCVCalls", "Track");
@@ -66,14 +76,14 @@ Java_cvsp_whitechristmas_OpencvCalls_faceDetection(JNIEnv *env, jclass type, jlo
                                          status,
                                          error);
                 done = std::chrono::high_resolution_clock::now();
-                time = std::chrono::duration_cast<std::chrono::milliseconds>(
+                keypointTrackingTime += std::chrono::duration_cast<std::chrono::milliseconds>(
                         done - started).count();
-                __android_log_print(ANDROID_LOG_INFO, "Timer", "keypoint tracking");
-                __android_log_print(ANDROID_LOG_INFO, "Timer", "%f", time);
+                keypointTrackingCalls++;
                 keypointsToSave.push_back(std::vector<cv::Point2f>());
                 float offsetX = (float) 0.0;
                 float offsetY = (float) 0.0;
                 int goodPixels = 0;
+                started = std::chrono::high_resolution_clock::now();
                 for (unsigned int j = 0; j < newKeypoints.size(); ++j) {
                     uchar c = status[j];
                     if (c == 1) {
@@ -107,6 +117,9 @@ Java_cvsp_whitechristmas_OpencvCalls_faceDetection(JNIEnv *env, jclass type, jlo
                             0, 360,
                             cv::Scalar(255, 0, 255), 4, 8, 0);
                 }
+                done = std::chrono::high_resolution_clock::now();
+                evaluateKeypointsTime += std::chrono::duration_cast<std::chrono::milliseconds>(done - started).count();
+                evaluateKeypointsCalls++;
             }
         }
         __android_log_print(ANDROID_LOG_INFO, "Keypoints", "Dumped keypoints");
@@ -137,9 +150,8 @@ Java_cvsp_whitechristmas_OpencvCalls_faceDetection(JNIEnv *env, jclass type, jlo
         face_cascade.detectMultiScale(frame_gray, faces, 1.1, 2, 0 | CV_HAAR_SCALE_IMAGE,
                                       cv::Size(30, 30));
         done = std::chrono::high_resolution_clock::now();
-        time = std::chrono::duration_cast<std::chrono::milliseconds>(done - started).count();
-        __android_log_print(ANDROID_LOG_INFO, "Timer", "face detection");
-        __android_log_print(ANDROID_LOG_INFO, "Timer", "%f", time);
+        faceDetectionTime += std::chrono::duration_cast<std::chrono::milliseconds>(done - started).count();
+        faceDetectionCalls++;
         std::vector<cv::Point2f> tmpKeypoints;
 
         //for ( int x = 0; x < frame_gray.rows; x++ )
@@ -156,6 +168,7 @@ Java_cvsp_whitechristmas_OpencvCalls_faceDetection(JNIEnv *env, jclass type, jlo
 
         __android_log_print(ANDROID_LOG_INFO, "OpenCVCalls", "Faces Found: ");
         __android_log_print(ANDROID_LOG_INFO, "OpenCVCalls", "%d", faces.size());
+        started = std::chrono::high_resolution_clock::now();
         for (size_t i = 0; i < faces.size(); i++) {
 
             cv::Rect currRect = faces[i];
@@ -170,12 +183,8 @@ Java_cvsp_whitechristmas_OpencvCalls_faceDetection(JNIEnv *env, jclass type, jlo
             cv::Mat mask = cv::Mat(frame_gray.rows, frame_gray.cols, CV_8UC1, (uchar) 0);
             mask(currRect) = 1;
 
-            started = std::chrono::high_resolution_clock::now();
+
             cv::goodFeaturesToTrack(frame_gray, tmpKeypoints, 100, 0.2, 0.2, mask);
-            done = std::chrono::high_resolution_clock::now();
-            time = std::chrono::duration_cast<std::chrono::milliseconds>(done - started).count();
-            __android_log_print(ANDROID_LOG_INFO, "Timer", "Feature Point Detection");
-            __android_log_print(ANDROID_LOG_INFO, "Timer", "%f", time);
             //render goodFeaturePoints
             for (unsigned int k = 0; k < tmpKeypoints.size(); k++) {
                 ellipse(frame, cv::Point(tmpKeypoints[k].y, frame.rows - tmpKeypoints[k].x),
@@ -203,7 +212,22 @@ Java_cvsp_whitechristmas_OpencvCalls_faceDetection(JNIEnv *env, jclass type, jlo
 //                }
 //            }
         }
+        done = std::chrono::high_resolution_clock::now();
+        keypointFindingTime += std::chrono::duration_cast<std::chrono::milliseconds>(done - started).count();
+        keypointFindingCalls++;
+
+        __android_log_print(ANDROID_LOG_INFO, "Timer", "preprocessing");
+        __android_log_print(ANDROID_LOG_INFO, "Timer", "%f", (preprocessTime/(float) preprocessCalls));
+        __android_log_print(ANDROID_LOG_INFO, "Timer", "keypoint tracking");
+        __android_log_print(ANDROID_LOG_INFO, "Timer", "%f", (keypointTrackingTime/(float) keypointTrackingCalls));
+        __android_log_print(ANDROID_LOG_INFO, "Timer", "keypoint evaluation");
+        __android_log_print(ANDROID_LOG_INFO, "Timer", "%f", (evaluateKeypointsTime/(float) evaluateKeypointsCalls));
+        __android_log_print(ANDROID_LOG_INFO, "Timer", "face detection");
+        __android_log_print(ANDROID_LOG_INFO, "Timer", "%f", (faceDetectionTime/(float) faceDetectionCalls));
+        __android_log_print(ANDROID_LOG_INFO, "Timer", "keypoint finding");
+        __android_log_print(ANDROID_LOG_INFO, "Timer", "%f", (keypointFindingTime/(float) keypointFindingCalls));
     }
+
 //    if (faces.size() == 0) {
 //        __android_log_print(ANDROID_LOG_INFO, "OpenCVCalls", "There are no faces");
 //    }
