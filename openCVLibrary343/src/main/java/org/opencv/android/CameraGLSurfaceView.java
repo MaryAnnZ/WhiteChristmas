@@ -4,10 +4,16 @@ import org.opencv.R;
 
 import android.content.Context;
 import android.content.res.TypedArray;
+import android.hardware.Camera;
 import android.opengl.GLSurfaceView;
 import android.util.AttributeSet;
 import android.util.Log;
+import android.view.Display;
+import android.view.Surface;
 import android.view.SurfaceHolder;
+import android.view.WindowManager;
+
+import static android.content.Context.WINDOW_SERVICE;
 
 public class CameraGLSurfaceView extends GLSurfaceView {
 
@@ -91,8 +97,8 @@ public class CameraGLSurfaceView extends GLSurfaceView {
     }
 
     @Override
-    public void surfaceChanged(SurfaceHolder holder, int format, int w, int h) {
-        super.surfaceChanged(holder, format, w, h);
+    public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
+        super.surfaceChanged(holder, format, width, height);
     }
 
     @Override

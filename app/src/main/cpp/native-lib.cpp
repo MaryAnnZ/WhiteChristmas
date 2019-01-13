@@ -20,19 +20,18 @@ Java_cvsp_whitechristmas_MainActivity_stringFromJNI(
 }
 
 //for converting from android frame to usable one
-cv::Point convert(int x, int y, cv::Mat frame);
-
-void doDeidentification(cv::Mat frame);
-
-bool isInEllipse(int x, int y, cv::Rect rect, cv::Point center);
-
-std::string type2str(int type);
+void convert(int x, int y, cv::Mat frame, cv::Point& oldPoint);
+void doDeidentification(cv::Mat frame,cv::Mat rotated_gray);
 
 std::vector<cv::Rect> faces;
 cv::String face_cascade_name = "/storage/emulated/0/Download/haarcascade_frontalface_default.xml";
+cv::String eyes_cascade_name = "/storage/emulated/0/Download/haarcascade_eye.xml";
 bool faceCascadedLoaded = false;
 cv::CascadeClassifier face_cascade;
 cv::Mat prevFrame;
+cv::CascadeClassifier eyes_cascade;
+int frameCounter;
+
 std::vector<std::vector<cv::Point2f>> keypoints;
 std::vector<int> countKeypointsPerFace;
 float dumpedKeypoints = 1.0;
@@ -51,12 +50,16 @@ extern "C"
 JNIEXPORT void JNICALL
 Java_cvsp_whitechristmas_OpencvCalls_faceDetection(JNIEnv *env, jclass type, jlong addrRgba) {
     cv::Mat &frame = *(cv::Mat *) addrRgba;     //8UC4
-    cv::Mat frame_gray;
 
     auto started = std::chrono::high_resolution_clock::now();
-    cvtColor(frame, frame_gray, cv::COLOR_BGR2GRAY);
+
+    cv::Mat frame_rot = frame;
+    cv::Mat frame_gray;
+    cv::rotate(frame_rot, frame_rot, cv::ROTATE_90_CLOCKWISE);
+    cvtColor(frame_rot, frame_gray, cv::COLOR_BGR2GRAY);
     cv::equalizeHist(frame_gray, frame_gray);
-    cv::rotate(frame_gray, frame_gray, cv::ROTATE_90_CLOCKWISE);
+
+
     auto done = std::chrono::high_resolution_clock::now();
     preprocessTime += std::chrono::duration_cast<std::chrono::milliseconds>(done - started).count();
     preprocessCalls++;
@@ -128,6 +131,9 @@ Java_cvsp_whitechristmas_OpencvCalls_faceDetection(JNIEnv *env, jclass type, jlo
         keypoints=keypointsToSave;
         prevFrame = frame_gray.clone();
 
+
+
+
     } else { //do detection
         __android_log_print(ANDROID_LOG_INFO, "OpenCVCalls", "Detect");
         countKeypointsPerFace.clear();
@@ -152,7 +158,6 @@ Java_cvsp_whitechristmas_OpencvCalls_faceDetection(JNIEnv *env, jclass type, jlo
         done = std::chrono::high_resolution_clock::now();
         faceDetectionTime += std::chrono::duration_cast<std::chrono::milliseconds>(done - started).count();
         faceDetectionCalls++;
-        std::vector<cv::Point2f> tmpKeypoints;
 
         //for ( int x = 0; x < frame_gray.rows; x++ )
         //{
@@ -166,6 +171,7 @@ Java_cvsp_whitechristmas_OpencvCalls_faceDetection(JNIEnv *env, jclass type, jlo
         //    }
         //}
 
+        std::vector<cv::Point2f> tmpKeypoints;
         __android_log_print(ANDROID_LOG_INFO, "OpenCVCalls", "Faces Found: ");
         __android_log_print(ANDROID_LOG_INFO, "OpenCVCalls", "%d", faces.size());
         started = std::chrono::high_resolution_clock::now();
@@ -178,7 +184,12 @@ Java_cvsp_whitechristmas_OpencvCalls_faceDetection(JNIEnv *env, jclass type, jlo
             ellipse(frame, center, cv::Size(currRect.width * 0.5, currRect.height * 0.5), 0, 0, 360,
                     cv::Scalar(255, 0, 255), 4, 8, 0);
 
+			//-- In each face, detect eyes
+            //std::vector<cv::Rect> eyes;
+            //cv::Mat faceROI = frame_gray(currRect);
+            //eyes_cascade.detectMultiScale( faceROI, eyes, 1.1, 2, 0 |CV_HAAR_SCALE_IMAGE, cv::Size(30, 30) );
 
+                __android_log_print(ANDROID_LOG_INFO, "Keypoints", "Finding keypoints");
             __android_log_print(ANDROID_LOG_INFO, "Keypoints", "Finding keypoints");
             cv::Mat mask = cv::Mat(frame_gray.rows, frame_gray.cols, CV_8UC1, (uchar) 0);
             mask(currRect) = 1;
@@ -239,88 +250,71 @@ Java_cvsp_whitechristmas_OpencvCalls_faceDetection(JNIEnv *env, jclass type, jlo
 //                cv::Scalar(0, 255, 0), 4, 8, 0);
 //    }
 
-//    doDeidentification(frame);
+    doDeidentification(frame,frame_rot);
+}
+
+void convert(int x, int y, cv::Mat frame, cv::Point& oldPoint) {
+    oldPoint.x = y;
+    oldPoint.y =frame.rows - x;
+
 
 }
 
-cv::Point convert(int x, int y, cv::Mat frame) {
-    cv::Point newPoint = cv::Point(0, 0);
-    newPoint.x = y;
-    newPoint.y = frame.rows - x;
-    return newPoint;
-}
+void doDeidentification(cv::Mat frame,cv::Mat frame_rot) {
+    cv::Point transPoint;
 
-void doDeidentification(cv::Mat frame) {
-    for (size_t i = 0; i < faces.size(); i++) {
-        cv::Rect currRect = faces[i];
-        cv::Point center(currRect.x + currRect.width * 0.5, currRect.y + currRect.height * 0.5);
-        //cv::Mat currentFace = image(currRect);
+    if (faces.size()>0) {
+        cv::Rect currRect = faces[1];
+        cv::Mat matRect = frame_rot;
+        cv::cvtColor(matRect,matRect,CV_BGRA2BGR);
+        cv::Mat result = cv::Mat::zeros(matRect.rows, matRect.cols, CV_8U); // all 0
+        cv::Mat bgModel, fgModel; // the models (internally used)
 
-        //        medianBlur(src,dst,i);
+			__android_log_print(ANDROID_LOG_INFO, "OpenCVCalls", "Doing Deidentification");
 
-        for (int y = currRect.y; y < currRect.y + currRect.height; y++) {
-            for (int x = currRect.x; x < currRect.x + currRect.width; x++) {
-                //if point is in the ellipse of rectancle, deindentificate!
-                //if ((pow((x - center.x), 2) / pow(currRect.width, 2))  + (pow((y - center.y), 2) / pow(currRect.height, 2)) <1) {
-                cv::Point transPoint = convert(x, y, frame);
+        // GrabCut segmentation
+        cv::grabCut(matRect,    // input image = the rect with face
+                    result,
+                    currRect,// rectangle containing foreground
+                    bgModel, fgModel, // models
+                    1,        // number of iterations
+                    cv::GC_INIT_WITH_RECT); // use rectangle
 
-                int grey = rand() % 255 + 10;
-                cv::Scalar intensity = frame.at<cv::Scalar>(transPoint);
-                intensity.val[0] = (int) rand() % 5 + (grey);
-                intensity.val[1] = (int) rand() % 5 + (grey);
-                intensity.val[2] = (int) rand() % 5 + (grey);
+        __android_log_print(ANDROID_LOG_INFO, "OpenCVCalls", "Doing 2");
 
-                frame.at<cv::Vec4b>(transPoint) = cv::Vec4b(rand() % 255, rand() % 255,
-                                                            rand() % 255, 1);
+        for(int y = currRect.y; y < currRect.y+currRect.height; y++)
+        {
+           for(int x = currRect.x; x < currRect.x+currRect.width; x++)
+            {
+                               convert(x, y, frame,transPoint);
+                               frame.at<cv::Vec4b>(transPoint) = result.at<cv::Vec4b>(cv::Point(x, y));
             }
         }
 
-        //for debugging
-        //ellipse(frame, convert(center.x,center.y,frame), cv::Size(currRect.height * 0.5, currRect.width * 0.5), 0, 0, 360,cv::Scalar(rand()%255, rand()%255, rand()%255),CV_FILLED);
     }
 
 
+//    for (size_t i = 0; i < faces.size(); i++) {
+//        //cv::Rect currRect = faces[i];
+//        //cv::Point center(currRect.x + currRect.width * 0.5, currRect.y + currRect.height * 0.5);
+//        //cv::Mat currentFace = image(currRect);
+//        //for(int y = currRect.y; y < currRect.y+currRect.height; y++)
+//        //{
+//         //  for(int x = currRect.x; x < currRect.x+currRect.width; x++)
+//        //    {
+//        //                       convert(x, y, frame,transPoint);
+//        //                        cv::grabCut()
+//        //                       frame.at<cv::Vec4b>(transPoint) = cv::Vec4b(rand()%255, rand()%255, rand()%255,1);
+//        //    }
+//        //}
+//
+//        //for debugging
+//        //ellipse(frame, convert(center.x,center.y,frame), cv::Size(currRect.height * 0.5, currRect.width * 0.5), 0, 0, 360,cv::Scalar(rand()%255, rand()%255, rand()%255),CV_FILLED);
+//    }
+
 }
 
-std::string type2str(int type) {
-    std::string r;
-
-    uchar depth = type & CV_MAT_DEPTH_MASK;
-    uchar chans = 1 + (type >> CV_CN_SHIFT);
-
-    switch (depth) {
-        case CV_8U:
-            r = "8U";
-            break;
-        case CV_8S:
-            r = "8S";
-            break;
-        case CV_16U:
-            r = "16U";
-            break;
-        case CV_16S:
-            r = "16S";
-            break;
-        case CV_32S:
-            r = "32S";
-            break;
-        case CV_32F:
-            r = "32F";
-            break;
-        case CV_64F:
-            r = "64F";
-            break;
-        default:
-            r = "User";
-            break;
-    }
-
-    r += "C";
-    r += (chans + '0');
-
-    return r;
-}
-
+  std::string r;
 extern "C"
 JNIEXPORT void JNICALL
 Java_cvsp_whitechristmas_OpencvCalls_faceTracking(JNIEnv *env, jclass type) {
