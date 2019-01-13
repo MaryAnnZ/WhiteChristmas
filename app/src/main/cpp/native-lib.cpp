@@ -33,13 +33,12 @@ cv::String face_cascade_name = "/storage/emulated/0/Download/haarcascade_frontal
 bool faceCascadedLoaded = false;
 cv::CascadeClassifier face_cascade;
 cv::Mat prevFrame;
-int frameCounter = 0;
 std::vector<std::vector<cv::Point2f>> keypoints;
-
+std::vector<int> countKeypointsPerFace;
+float dumpedKeypoints = 1.0;
 extern "C"
 JNIEXPORT void JNICALL
 Java_cvsp_whitechristmas_OpencvCalls_faceDetection(JNIEnv *env, jclass type, jlong addrRgba) {
-//    frameCounter =0;
     cv::Mat &frame = *(cv::Mat *) addrRgba;     //8UC4
     cv::Mat frame_gray;
 
@@ -52,7 +51,7 @@ Java_cvsp_whitechristmas_OpencvCalls_faceDetection(JNIEnv *env, jclass type, jlo
     __android_log_print(ANDROID_LOG_INFO, "Timer", "image processing");
     __android_log_print(ANDROID_LOG_INFO, "Timer", "%f", time);
 
-    if (frameCounter > 0) { //do tracking
+    if (dumpedKeypoints < 0.15) { //do tracking
         __android_log_print(ANDROID_LOG_INFO, "OpenCVCalls", "Track");
 
         std::vector<cv::Point2f> newKeypoints;
@@ -92,6 +91,10 @@ Java_cvsp_whitechristmas_OpencvCalls_faceDetection(JNIEnv *env, jclass type, jlo
                     }
                 }
                 if (goodPixels > 0) {
+                    float dumped = ((float) countKeypointsPerFace[i] - (float) goodPixels) / (float) countKeypointsPerFace[i];
+                    if (dumped > dumpedKeypoints) {
+                        dumpedKeypoints = dumped;
+                    }
                     offsetX = offsetX / (float) goodPixels;
                     offsetY = offsetY / (float) goodPixels;
                     cv::Rect currentFace = faces[i];
@@ -106,17 +109,15 @@ Java_cvsp_whitechristmas_OpencvCalls_faceDetection(JNIEnv *env, jclass type, jlo
                 }
             }
         }
+        __android_log_print(ANDROID_LOG_INFO, "Keypoints", "Dumped keypoints");
+        __android_log_print(ANDROID_LOG_INFO, "Keypoints", "%f", dumpedKeypoints);
         newKeypoints.clear();
         keypoints=keypointsToSave;
         prevFrame = frame_gray.clone();
 
-        if (frameCounter > 11) {
-            frameCounter = 0;
-            return;
-        }
     } else { //do detection
         __android_log_print(ANDROID_LOG_INFO, "OpenCVCalls", "Detect");
-
+        countKeypointsPerFace.clear();
         keypoints.clear();
         if (!faceCascadedLoaded) {
             if (!face_cascade.load(face_cascade_name)) {
@@ -186,6 +187,8 @@ Java_cvsp_whitechristmas_OpencvCalls_faceDetection(JNIEnv *env, jclass type, jlo
 
 
             if (keypoints.size() > 0) {
+                countKeypointsPerFace.push_back(tmpKeypoints.size()+1);
+                dumpedKeypoints = 0.0;
                 __android_log_print(ANDROID_LOG_INFO, "OpenCVCalls", "Some keypoints found");
             } else {
                 __android_log_print(ANDROID_LOG_INFO, "OpenCVCalls", "No keypoints found");
@@ -214,7 +217,6 @@ Java_cvsp_whitechristmas_OpencvCalls_faceDetection(JNIEnv *env, jclass type, jlo
 
 //    doDeidentification(frame);
 
-    frameCounter++;
 }
 
 cv::Point convert(int x, int y, cv::Mat frame) {
