@@ -21,15 +21,21 @@ Java_cvsp_whitechristmas_MainActivity_stringFromJNI(
 
 //for converting from android frame to usable one
 void convert(int x, int y, cv::Mat frame, cv::Point& oldPoint);
-void doDeidentification(cv::Mat frame,cv::Mat rotated_gray);
+void doDeidentification(cv::Mat currentFrame);
+void recalculateDeidentification(cv::Mat frame_rot, cv::Mat frame);
+void detectFace(cv::Mat frame_grey_rot, cv::Mat currentFrame);
+void doTracking(cv::Mat frame_grey_rot, cv::Mat currentFrame);
+
 
 std::vector<cv::Rect> faces;
 cv::String face_cascade_name = "/storage/emulated/0/Download/haarcascade_frontalface_default.xml";
 cv::String eyes_cascade_name = "/storage/emulated/0/Download/haarcascade_eye.xml";
 bool faceCascadedLoaded = false;
 cv::CascadeClassifier face_cascade;
-cv::Mat prevFrame;
 cv::CascadeClassifier eyes_cascade;
+
+cv::Mat prevFrame;
+cv::Mat deIdentificationMask;   //mask overlay
 
 std::vector<std::vector<cv::Point2f>> keypoints;
 std::vector<int> countKeypointsPerFace;
@@ -51,6 +57,7 @@ int faceLocationY = -1;
 int customFaceBBHeight = -1;
 int customFaceMaxX = -1;
 int customFaceMaxY = -1;
+
 extern "C"
 JNIEXPORT void JNICALL
 Java_cvsp_whitechristmas_OpencvCalls_faceDetection(JNIEnv *env, jclass type, jlong addrRgba) {
@@ -70,239 +77,261 @@ Java_cvsp_whitechristmas_OpencvCalls_faceDetection(JNIEnv *env, jclass type, jlo
         customFaceMaxY = frame_gray.rows - customFaceBBHeight;
     }
 
-
     auto done = std::chrono::high_resolution_clock::now();
     preprocessTime += std::chrono::duration_cast<std::chrono::milliseconds>(done - started).count();
     preprocessCalls++;
 
     if (dumpedKeypoints < 0.15 && faceLocationX == -1) { //do tracking
+
         __android_log_print(ANDROID_LOG_INFO, "OpenCVCalls", "Track");
+        doTracking(frame_gray,frame);
 
-        std::vector<cv::Point2f> newKeypoints;
-        std::vector<uchar> status;
-        std::vector<float> error;
-        std::vector<cv::Rect> facesTmp;
-        std::vector<std::vector<cv::Point2f>> keypointsToSave;
-        for (unsigned int i = 0; i < keypoints.size(); ++i) {
-            if (keypoints[i].size() > 0) {
-                started = std::chrono::high_resolution_clock::now();
-                cv::calcOpticalFlowPyrLK(prevFrame, frame_gray, keypoints[i], newKeypoints,
-                                         status,
-                                         error);
-                done = std::chrono::high_resolution_clock::now();
-                keypointTrackingTime += std::chrono::duration_cast<std::chrono::milliseconds>(
-                        done - started).count();
-                keypointTrackingCalls++;
-                keypointsToSave.push_back(std::vector<cv::Point2f>());
-                float offsetX = (float) 0.0;
-                float offsetY = (float) 0.0;
-                int goodPixels = 0;
-                started = std::chrono::high_resolution_clock::now();
-                for (unsigned int j = 0; j < newKeypoints.size(); ++j) {
-                    uchar c = status[j];
-                    if (c == 1) {
-
-                        goodPixels++;
-                        offsetX += (newKeypoints[j].x - keypoints[i][j].x);
-                        offsetY += (newKeypoints[j].y - keypoints[i][j].y);
-                        keypointsToSave[i].push_back(newKeypoints[j]);
-                        __android_log_print(ANDROID_LOG_INFO, "OpenCVCalls", "rendering points");
-                        ellipse(frame, cv::Point(newKeypoints[j].y, frame.rows - newKeypoints[j].x),
-                                cv::Size(5, 5), 0, 0, 360,
-                                cv::Scalar(i * 10, 0, 0), 4, 8, 0);
-                    } else if (c == 0) {
-                        __android_log_print(ANDROID_LOG_INFO, "OpenCVCalls", "status is 0");
-                    }
-                }
-                if (goodPixels > 0) {
-                    float dumped = ((float) countKeypointsPerFace[i] - (float) goodPixels) / (float) countKeypointsPerFace[i];
-                    if (dumped > dumpedKeypoints) {
-                        dumpedKeypoints = dumped;
-                    }
-                    offsetX = offsetX / (float) goodPixels;
-                    offsetY = offsetY / (float) goodPixels;
-                    cv::Rect currentFace = faces[i];
-                    faces[i] = cv::Rect(currentFace.x + (int) offsetX,
-                                        currentFace.y + (int) offsetY, currentFace.width,
-                                        currentFace.height);
-                    cv::Point center(faces[i].y + faces[i].height * 0.5,
-                                     frame.rows - faces[i].x - faces[i].width * 0.5);
-                    ellipse(frame, center, cv::Size(faces[i].width * 0.5, faces[i].height * 0.5), 0,
-                            0, 360,
-                            cv::Scalar(255, 0, 255), 4, 8, 0);
-                }
-                done = std::chrono::high_resolution_clock::now();
-                evaluateKeypointsTime += std::chrono::duration_cast<std::chrono::milliseconds>(done - started).count();
-                evaluateKeypointsCalls++;
-            }
-        }
-        __android_log_print(ANDROID_LOG_INFO, "Keypoints", "Dumped keypoints");
-        __android_log_print(ANDROID_LOG_INFO, "Keypoints", "%f", dumpedKeypoints);
-        newKeypoints.clear();
-        keypoints=keypointsToSave;
-        prevFrame = frame_gray.clone();
 
     } else { //do detection
         __android_log_print(ANDROID_LOG_INFO, "OpenCVCalls", "Detect");
-        countKeypointsPerFace.clear();
-        keypoints.clear();
-        if (!faceCascadedLoaded) {
-            if (!face_cascade.load(face_cascade_name)) {
-                __android_log_print(ANDROID_LOG_INFO, "OpenCVCalls", "Error loading face cascade");
-                return;
-            } else {
-                faceCascadedLoaded = true;
-            }
+        detectFace(frame_gray,frame);
+        recalculateDeidentification(frame_rot,frame);
+
+    }
+
+    doDeidentification(frame);
+}
+
+void detectFace(cv::Mat frame_grey_rot, cv::Mat frame) {
+    countKeypointsPerFace.clear();
+    keypoints.clear();
+    if (!faceCascadedLoaded) {
+        if (!face_cascade.load(face_cascade_name)) {
+            __android_log_print(ANDROID_LOG_INFO, "OpenCVCalls", "Error loading face cascade");
+            return;
+        } else {
+            faceCascadedLoaded = true;
         }
+    }
 
 
-        prevFrame = frame_gray.clone();
+    prevFrame = frame_grey_rot.clone();
 
-        //-- Detect faces
-        faces.clear();
-        started = std::chrono::high_resolution_clock::now();
-        face_cascade.detectMultiScale(frame_gray, faces, 1.1, 2, 0 | CV_HAAR_SCALE_IMAGE,
-                                      cv::Size(30, 30));
-        done = std::chrono::high_resolution_clock::now();
-        faceDetectionTime += std::chrono::duration_cast<std::chrono::milliseconds>(done - started).count();
-        faceDetectionCalls++;
+    //-- Detect faces
+    faces.clear();
+    auto started = std::chrono::high_resolution_clock::now();
+    face_cascade.detectMultiScale(frame_grey_rot, faces, 1.1, 2, 0 | CV_HAAR_SCALE_IMAGE,
+                                  cv::Size(30, 30));
+    auto done = std::chrono::high_resolution_clock::now();
+    faceDetectionTime += std::chrono::duration_cast<std::chrono::milliseconds>(done - started).count();
+    faceDetectionCalls++;
 
-        //get the only face which is at the point
-        bool faceFound = false;
-        if (faceLocationX != -1 && faceLocationY != -1) {
-            for (unsigned int i = 0; i < faces.size(); ++i) {
-                cv::Rect face = cv::Rect(faces[i]);
-                if (face.x < faceLocationX && faceLocationX < (face.x + face.width) && face.y < faceLocationY && faceLocationY < (face.y + face.height)) {
-                    faces.clear();
-                    faces.push_back(face);
-                    faceLocationX = -1;
-                    faceLocationY = -1;
-                    faceFound = true;
-                    break;
-                }
-            }
-            //no face were found at the given location
-            if (!faceFound) {
+    //get the only face which is at the point
+    bool faceFound = false;
+    if (faceLocationX != -1 && faceLocationY != -1) {
+        for (unsigned int i = 0; i < faces.size(); ++i) {
+            cv::Rect face = cv::Rect(faces[i]);
+            if (face.x < faceLocationX && faceLocationX < (face.x + face.width) && face.y < faceLocationY && faceLocationY < (face.y + face.height)) {
                 faces.clear();
-                int x = std::min(customFaceMaxX,
-                                 std::max(0, (faceLocationX - (customFaceBBHeight / 2))));
-                int y = std::min(customFaceMaxY,
-                                 std::max(0, (faceLocationY - (customFaceBBHeight / 2))));
-                cv::Rect face = cv::Rect(x, y, customFaceBBHeight, customFaceBBHeight);
                 faces.push_back(face);
                 faceLocationX = -1;
                 faceLocationY = -1;
+                faceFound = true;
+                break;
             }
         }
-
-        std::vector<cv::Point2f> tmpKeypoints;
-        __android_log_print(ANDROID_LOG_INFO, "OpenCVCalls", "Faces Found: ");
-        __android_log_print(ANDROID_LOG_INFO, "OpenCVCalls", "%d", faces.size());
-        started = std::chrono::high_resolution_clock::now();
-        for (size_t i = 0; i < faces.size(); i++) {
-
-            cv::Rect currRect = faces[i];
-            //RENDER DETECTED FACES
-            cv::Point center(currRect.y + currRect.height * 0.5,
-                             frame.rows - currRect.x - currRect.width * 0.5);
-            ellipse(frame, center, cv::Size(currRect.width * 0.5, currRect.height * 0.5), 0, 0, 360,
-                    cv::Scalar(255, 0, 255), 4, 8, 0);
-
-			//-- In each face, detect eyes
-            //std::vector<cv::Rect> eyes;
-            //cv::Mat faceROI = frame_gray(currRect);
-            //eyes_cascade.detectMultiScale( faceROI, eyes, 1.1, 2, 0 |CV_HAAR_SCALE_IMAGE, cv::Size(30, 30) );
-
-            __android_log_print(ANDROID_LOG_INFO, "Keypoints", "Finding keypoints");
-            cv::Mat mask = cv::Mat(frame_gray.rows, frame_gray.cols, CV_8UC1, (uchar) 0);
-            mask(currRect) = 1;
-
-            cv::goodFeaturesToTrack(frame_gray, tmpKeypoints, 100, 0.2, 0.2, mask);
-            //render goodFeaturePoints
-            for (unsigned int k = 0; k < tmpKeypoints.size(); k++) {
-                ellipse(frame, cv::Point(tmpKeypoints[k].y, frame.rows - tmpKeypoints[k].x),
-                        cv::Size(5, 5), 0, 0, 360,
-                        cv::Scalar(255, 0, 0), 4, 8, 0);
-            }
-            keypoints.push_back(tmpKeypoints);
-
-
-            if (keypoints.size() > 0) {
-                countKeypointsPerFace.push_back(tmpKeypoints.size()+1);
-                dumpedKeypoints = 0.0;
-                __android_log_print(ANDROID_LOG_INFO, "OpenCVCalls", "Some keypoints found");
-            } else {
-                __android_log_print(ANDROID_LOG_INFO, "OpenCVCalls", "No keypoints found");
-            };
+        //no face were found at the given location
+        if (!faceFound) {
+            faces.clear();
+            int x = std::min(customFaceMaxX,
+                             std::max(0, (faceLocationX - (customFaceBBHeight / 2))));
+            int y = std::min(customFaceMaxY,
+                             std::max(0, (faceLocationY - (customFaceBBHeight / 2))));
+            cv::Rect face = cv::Rect(x, y, customFaceBBHeight, customFaceBBHeight);
+            faces.push_back(face);
+            faceLocationX = -1;
+            faceLocationY = -1;
         }
-        done = std::chrono::high_resolution_clock::now();
-        keypointFindingTime += std::chrono::duration_cast<std::chrono::milliseconds>(done - started).count();
-        keypointFindingCalls++;
-
-        __android_log_print(ANDROID_LOG_INFO, "Timer", "preprocessing");
-        __android_log_print(ANDROID_LOG_INFO, "Timer", "%f", (preprocessTime/(float) preprocessCalls));
-        __android_log_print(ANDROID_LOG_INFO, "Timer", "keypoint tracking");
-        __android_log_print(ANDROID_LOG_INFO, "Timer", "%f", (keypointTrackingTime/(float) keypointTrackingCalls));
-        __android_log_print(ANDROID_LOG_INFO, "Timer", "keypoint evaluation");
-        __android_log_print(ANDROID_LOG_INFO, "Timer", "%f", (evaluateKeypointsTime/(float) evaluateKeypointsCalls));
-        __android_log_print(ANDROID_LOG_INFO, "Timer", "face detection");
-        __android_log_print(ANDROID_LOG_INFO, "Timer", "%f", (faceDetectionTime/(float) faceDetectionCalls));
-        __android_log_print(ANDROID_LOG_INFO, "Timer", "keypoint finding");
-        __android_log_print(ANDROID_LOG_INFO, "Timer", "%f", (keypointFindingTime/(float) keypointFindingCalls));
     }
 
-//    if (faces.size() == 0) {
-//        __android_log_print(ANDROID_LOG_INFO, "OpenCVCalls", "There are no faces");
-//    }
-//    for (size_t i = 0; i < faces.size(); i++) {
-//        cv::Rect currRect = faces[i];
-//        cv::Point center(currRect.y + currRect.height * 0.5,
-//                         frame.rows - currRect.x - currRect.width * 0.5);
-//        ellipse(frame, center, cv::Size(currRect.width * 0.5, currRect.height * 0.5), 0, 0, 360,
-//                cv::Scalar(0, 255, 0), 4, 8, 0);
-//    }
+    std::vector<cv::Point2f> tmpKeypoints;
+    __android_log_print(ANDROID_LOG_INFO, "OpenCVCalls", "Faces Found: ");
+    __android_log_print(ANDROID_LOG_INFO, "OpenCVCalls", "%d", faces.size());
+    started = std::chrono::high_resolution_clock::now();
+    for (size_t i = 0; i < faces.size(); i++) {
 
-//    doDeidentification(frame,frame_rot);
+        cv::Rect currRect = faces[i];
+        //RENDER DETECTED FACES
+        cv::Point center(currRect.y + currRect.height * 0.5,
+                         frame.rows - currRect.x - currRect.width * 0.5);
+        ellipse(frame, center, cv::Size(currRect.width * 0.5, currRect.height * 0.5), 0, 0, 360,
+                cv::Scalar(255, 0, 255), 4, 8, 0);
+
+        //-- In each face, detect eyes
+        //std::vector<cv::Rect> eyes;
+        //cv::Mat faceROI = frame_gray(currRect);
+        //eyes_cascade.detectMultiScale( faceROI, eyes, 1.1, 2, 0 |CV_HAAR_SCALE_IMAGE, cv::Size(30, 30) );
+
+        __android_log_print(ANDROID_LOG_INFO, "Keypoints", "Finding keypoints");
+        cv::Mat mask = cv::Mat(frame_grey_rot.rows, frame_grey_rot.cols, CV_8UC1, (uchar) 0);
+        mask(currRect) = 1;
+
+        cv::goodFeaturesToTrack(frame_grey_rot, tmpKeypoints, 100, 0.2, 0.2, mask);
+        //render goodFeaturePoints
+        for (unsigned int k = 0; k < tmpKeypoints.size(); k++) {
+            ellipse(frame, cv::Point(tmpKeypoints[k].y, frame.rows - tmpKeypoints[k].x),
+                    cv::Size(5, 5), 0, 0, 360,
+                    cv::Scalar(255, 0, 0), 4, 8, 0);
+        }
+        keypoints.push_back(tmpKeypoints);
+
+
+        if (keypoints.size() > 0) {
+            countKeypointsPerFace.push_back(tmpKeypoints.size()+1);
+            dumpedKeypoints = 0.0;
+            __android_log_print(ANDROID_LOG_INFO, "OpenCVCalls", "Some keypoints found");
+        } else {
+            __android_log_print(ANDROID_LOG_INFO, "OpenCVCalls", "No keypoints found");
+        };
+    }
+    done = std::chrono::high_resolution_clock::now();
+    keypointFindingTime += std::chrono::duration_cast<std::chrono::milliseconds>(done - started).count();
+    keypointFindingCalls++;
+
+    __android_log_print(ANDROID_LOG_INFO, "Timer", "preprocessing");
+    __android_log_print(ANDROID_LOG_INFO, "Timer", "%f", (preprocessTime/(float) preprocessCalls));
+    __android_log_print(ANDROID_LOG_INFO, "Timer", "keypoint tracking");
+    __android_log_print(ANDROID_LOG_INFO, "Timer", "%f", (keypointTrackingTime/(float) keypointTrackingCalls));
+    __android_log_print(ANDROID_LOG_INFO, "Timer", "keypoint evaluation");
+    __android_log_print(ANDROID_LOG_INFO, "Timer", "%f", (evaluateKeypointsTime/(float) evaluateKeypointsCalls));
+    __android_log_print(ANDROID_LOG_INFO, "Timer", "face detection");
+    __android_log_print(ANDROID_LOG_INFO, "Timer", "%f", (faceDetectionTime/(float) faceDetectionCalls));
+    __android_log_print(ANDROID_LOG_INFO, "Timer", "keypoint finding");
+    __android_log_print(ANDROID_LOG_INFO, "Timer", "%f", (keypointFindingTime/(float) keypointFindingCalls));
+}
+
+void doTracking(cv::Mat frame_grey_rot, cv::Mat currentFrame) {
+    std::vector<cv::Point2f> newKeypoints;
+    std::vector<uchar> status;
+    std::vector<float> error;
+    std::vector<cv::Rect> facesTmp;
+    std::vector<std::vector<cv::Point2f>> keypointsToSave;
+    for (unsigned int i = 0; i < keypoints.size(); ++i) {
+        if (keypoints[i].size() > 0) {
+            auto started = std::chrono::high_resolution_clock::now();
+            cv::calcOpticalFlowPyrLK(prevFrame, frame_grey_rot, keypoints[i], newKeypoints,
+                                     status,
+                                     error);
+            auto done = std::chrono::high_resolution_clock::now();
+            keypointTrackingTime += std::chrono::duration_cast<std::chrono::milliseconds>(
+                    done - started).count();
+            keypointTrackingCalls++;
+            keypointsToSave.push_back(std::vector<cv::Point2f>());
+            float offsetX = (float) 0.0;
+            float offsetY = (float) 0.0;
+            int goodPixels = 0;
+            started = std::chrono::high_resolution_clock::now();
+            for (unsigned int j = 0; j < newKeypoints.size(); ++j) {
+                uchar c = status[j];
+                if (c == 1) {
+
+                    goodPixels++;
+                    offsetX += (newKeypoints[j].x - keypoints[i][j].x);
+                    offsetY += (newKeypoints[j].y - keypoints[i][j].y);
+                    keypointsToSave[i].push_back(newKeypoints[j]);
+                    __android_log_print(ANDROID_LOG_INFO, "OpenCVCalls", "rendering points");
+                    ellipse(currentFrame, cv::Point(newKeypoints[j].y, currentFrame.rows - newKeypoints[j].x),
+                            cv::Size(5, 5), 0, 0, 360,
+                            cv::Scalar(i * 10, 0, 0), 4, 8, 0);
+                } else if (c == 0) {
+                    __android_log_print(ANDROID_LOG_INFO, "OpenCVCalls", "status is 0");
+                }
+            }
+            if (goodPixels > 0) {
+                float dumped = ((float) countKeypointsPerFace[i] - (float) goodPixels) / (float) countKeypointsPerFace[i];
+                if (dumped > dumpedKeypoints) {
+                    dumpedKeypoints = dumped;
+                }
+                offsetX = offsetX / (float) goodPixels;
+                offsetY = offsetY / (float) goodPixels;
+                cv::Rect currentFace = faces[i];
+                faces[i] = cv::Rect(currentFace.x + (int) offsetX,
+                                    currentFace.y + (int) offsetY, currentFace.width,
+                                    currentFace.height);
+                cv::Point center(faces[i].y + faces[i].height * 0.5,
+                                 currentFrame.rows - faces[i].x - faces[i].width * 0.5);
+                ellipse(currentFrame, center, cv::Size(faces[i].width * 0.5, faces[i].height * 0.5), 0,
+                        0, 360,
+                        cv::Scalar(255, 0, 255), 4, 8, 0);
+            }
+            done = std::chrono::high_resolution_clock::now();
+            evaluateKeypointsTime += std::chrono::duration_cast<std::chrono::milliseconds>(done - started).count();
+            evaluateKeypointsCalls++;
+        }
+    }
+    __android_log_print(ANDROID_LOG_INFO, "Keypoints", "Dumped keypoints");
+    __android_log_print(ANDROID_LOG_INFO, "Keypoints", "%f", dumpedKeypoints);
+    newKeypoints.clear();
+    keypoints=keypointsToSave;
+    prevFrame = frame_grey_rot.clone();
 }
 
 void convert(int x, int y, cv::Mat frame, cv::Point& oldPoint) {
     oldPoint.x = y;
     oldPoint.y =frame.rows - x;
-
-
 }
 
-void doDeidentification(cv::Mat frame,cv::Mat frame_rot) {
-    cv::Point transPoint;
 
+void doDeidentification(cv::Mat currentFrame) {
     if (faces.size()>0) {
-        cv::Rect currRect = faces[1];
+        cv::Rect realFace = faces[0];
+
+        cv::Point transPoint;
+        for (int y = realFace.y; y < realFace.y + realFace.height; y++) {
+            for (int x = realFace.x; x < realFace.x + realFace.width; x++) {
+                unsigned char current = deIdentificationMask.at<unsigned char>(cv::Point(x, y));
+                if (current == 1 || current == 4) {
+                    convert(x, y, currentFrame, transPoint);
+
+                    //if ((pow((x - center.x), 2) / pow(currRect.width, 2))  + (pow((y - center.y), 2) / pow(currRect.height, 2)) <1) {
+                    //<v::Point transPoint = convert(x, y, frame);
+
+                    //int grey = rand() % 255 + 10;
+                    //cv::Scalar intensity = frame.at<cv::Scalar>(transPoint);
+                    //intensity.val[0] = (int) rand() % 5 + (grey);
+                    //intensity.val[1] = (int) rand() % 5 + (grey);
+                    //intensity.val[2] = (int) rand() % 5 + (grey);
+
+                    //frame.at<cv::Vec4b>(transPoint) = cv::Vec4b(rand() % 255, rand() % 255,  rand() % 255, 1);
+                }
+            }
+
+            //for debugging
+            //ellipse(frame, convert(center.x,center.y,frame), cv::Size(currRect.height * 0.5, currRect.width * 0.5), 0, 0, 360,cv::Scalar(rand()%255, rand()%255, rand()%255),CV_FILLED);
+        }
+
+
+    }
+}
+
+void recalculateDeidentification(cv::Mat frame_rot, cv::Mat frame) {
+    if (faces.size()>0) {
+        cv::Rect realFace = faces[0];
+
         cv::Mat matRect = frame_rot;
-        cv::cvtColor(matRect,matRect,CV_BGRA2BGR);
+        cv::cvtColor(matRect, matRect, CV_BGRA2BGR);
         cv::Mat result = cv::Mat::zeros(matRect.rows, matRect.cols, CV_8U); // all 0
         cv::Mat bgModel, fgModel; // the models (internally used)
 
-			__android_log_print(ANDROID_LOG_INFO, "OpenCVCalls", "Doing Deidentification");
+        __android_log_print(ANDROID_LOG_INFO, "OpenCVCalls", "Calculating Faceboundaries");
 
         // GrabCut segmentation
         cv::grabCut(matRect,    // input image = the rect with face
                     result,
-                    currRect,// rectangle containing foreground
+                    realFace,// rectangle containing foreground
                     bgModel, fgModel, // models
                     1,        // number of iterations
                     cv::GC_INIT_WITH_RECT); // use rectangle
 
-        __android_log_print(ANDROID_LOG_INFO, "OpenCVCalls", "Doing 2");
+        __android_log_print(ANDROID_LOG_INFO, "OpenCVCalls", "Done Calculating Faceboundaries");
 
-        for(int y = currRect.y; y < currRect.y+currRect.height; y++)
-        {
-           for(int x = currRect.x; x < currRect.x+currRect.width; x++)
-            {
-                               convert(x, y, frame,transPoint);
-                               frame.at<cv::Vec4b>(transPoint) = result.at<cv::Vec4b>(cv::Point(x, y));
-            }
-        }
 
+        deIdentificationMask = result;
     }
 
 
