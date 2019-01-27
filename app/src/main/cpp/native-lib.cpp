@@ -21,8 +21,10 @@ Java_cvsp_whitechristmas_MainActivity_stringFromJNI(
 
 //for converting from android frame to usable one
 void convert(int x, int y, cv::Mat frame, cv::Point &oldPoint);
+
 void doCallLogging();
-void doDeidentification(cv::Mat currentFrame);
+
+void doDeidentification(cv::Mat currentFrame, cv::Mat frame_rot, jboolean useFilter);
 
 void recalculateDeidentification(cv::Mat frame_rot, cv::Mat frame);
 
@@ -46,6 +48,7 @@ cv::Mat prevFrame;
 cv::Mat deIdentificationMask;   //mask overlay
 
 cv::Rect mainBodyPart;
+cv::Rect facePart;
 std::vector<cv::Point2f> mainBodyKeypoints;
 int countKeypointsForMainBody;
 float dumpedKeypoints = 1.0;
@@ -63,6 +66,9 @@ float keypointFindingTime = 0.0;
 int keypointFindingCalls = 0;
 float grabCutTime = 0.0;
 int grabCutCalls = 0;
+float deIdentificationTime = 0.0;
+int deIdentificationCalls = 0;
+int CountReEstimationMainPart = 0;
 
 std::vector<float> mainBodyPartTrackingOffset; //offset since the beginning of tracking
 
@@ -75,7 +81,8 @@ int customFaceMaxY = -1;
 
 extern "C"
 JNIEXPORT void JNICALL
-Java_cvsp_whitechristmas_OpencvCalls_faceDetection(JNIEnv *env, jclass type, jlong addrRgba, jboolean backCamera) {
+Java_cvsp_whitechristmas_OpencvCalls_faceDetection(JNIEnv *env, jclass type, jlong addrRgba,
+                                                   jboolean backCamera, jboolean filter, jboolean deIdentificationRunning) {
     cv::Mat &frame = *(cv::Mat *) addrRgba;     //8UC4
 
     auto started = std::chrono::high_resolution_clock::now();
@@ -85,8 +92,9 @@ Java_cvsp_whitechristmas_OpencvCalls_faceDetection(JNIEnv *env, jclass type, jlo
 
     if (backCamera) {
         cv::rotate(frame_rot, frame_rot, cv::ROTATE_90_CLOCKWISE);
-    } else {
+    }else {
         cv::rotate(frame_rot, frame_rot, cv::ROTATE_90_COUNTERCLOCKWISE);
+        cv::rotate(frame_rot, frame_rot, cv::ROTATE_180);
     }
 
     cvtColor(frame_rot, frame_gray_rot, cv::COLOR_BGR2GRAY);
@@ -114,10 +122,14 @@ Java_cvsp_whitechristmas_OpencvCalls_faceDetection(JNIEnv *env, jclass type, jlo
         __android_log_print(ANDROID_LOG_INFO, "Timer", "keypoint evaluation");
         __android_log_print(ANDROID_LOG_INFO, "Timer", "%f",
                             (evaluateKeypointsTime / (float) evaluateKeypointsCalls));
+        __android_log_print(ANDROID_LOG_INFO, "Timer", "Deidentification");
+        __android_log_print(ANDROID_LOG_INFO, "Timer", "%f",
+                            (deIdentificationTime / (float) deIdentificationCalls));
         __android_log_print(ANDROID_LOG_INFO, "Timer", "*****************");
 
     } else { //do detection
 
+        CountReEstimationMainPart++;
         mainBodyPartTrackingOffset.clear();
         detectFace(frame_gray_rot, frame, backCamera);
         recalculateDeidentification(frame_rot, frame);
@@ -128,7 +140,17 @@ Java_cvsp_whitechristmas_OpencvCalls_faceDetection(JNIEnv *env, jclass type, jlo
         mainBodyPartTrackingOffset.push_back(0);
     }
 
-    doDeidentification(frame);
+    if (deIdentificationRunning && mainBodyPartFound) {
+        doDeidentification(frame, frame_rot, filter);
+
+    } else if (!deIdentificationRunning && mainBodyPartFound){
+
+        cv::Point tl; cv::Point br;
+        convert(facePart.tl().x,facePart.tl().y,frame,tl);
+        convert(facePart.br().x,facePart.br().y,frame,br);
+        rectangle(frame, tl,br, cv::Scalar(255, 0, 0), 5, 8, 0);
+    }
+
 }
 
 void detectFace(cv::Mat frame_grey_rot, cv::Mat frame, bool backCamera) {
@@ -138,7 +160,7 @@ void detectFace(cv::Mat frame_grey_rot, cv::Mat frame, bool backCamera) {
     mainBodyPartFound = false;
 
     if (!faceCascadedLoaded) {
-        if (!face_cascade.load(face_cascade_name) ) {
+        if (!face_cascade.load(face_cascade_name)) {
             __android_log_print(ANDROID_LOG_INFO, "OpenCVCalls",
                                 "Error loading face cascade");
             return;
@@ -150,7 +172,7 @@ void detectFace(cv::Mat frame_grey_rot, cv::Mat frame, bool backCamera) {
             __android_log_print(ANDROID_LOG_INFO, "OpenCVCalls",
                                 "Error loading eye cascade");
             return;
-        }else {
+        } else {
             faceCascadedLoaded = true;
         }
     }
@@ -162,10 +184,12 @@ void detectFace(cv::Mat frame_grey_rot, cv::Mat frame, bool backCamera) {
 
     auto started = std::chrono::high_resolution_clock::now();
     if (!backCamera) {
-        face_cascade.detectMultiScale(frame_grey_rot, allMainBodyParts, 1.1, 2, 0 | CV_HAAR_SCALE_IMAGE,
+        face_cascade.detectMultiScale(frame_grey_rot, allMainBodyParts, 1.1, 2,
+                                      0 | CV_HAAR_SCALE_IMAGE,
                                       cv::Size(30, 30));
     } else {
-        body_cascade.detectMultiScale(frame_grey_rot, allMainBodyParts, 1.1, 2, 0 | CV_HAAR_SCALE_IMAGE,
+        body_cascade.detectMultiScale(frame_grey_rot, allMainBodyParts, 1.1, 2,
+                                      0 | CV_HAAR_SCALE_IMAGE,
                                       cv::Size(30, 30));
     }
     auto done = std::chrono::high_resolution_clock::now();
@@ -201,13 +225,16 @@ void detectFace(cv::Mat frame_grey_rot, cv::Mat frame, bool backCamera) {
         //draw touched face
         cv::Point center(mainBodyPart.y + mainBodyPart.height * 0.5,
                          frame.rows - mainBodyPart.x - mainBodyPart.width * 0.5);
-        ellipse(frame, center, cv::Size(mainBodyPart.width * 0.5, mainBodyPart.height * 0.5), 0, 0, 360,
+        ellipse(frame, center, cv::Size(mainBodyPart.width * 0.5, mainBodyPart.height * 0.5), 0, 0,
+                360,
                 cv::Scalar(255, 0, 255), 4, 8, 0);
 
         //get keypoints for face
         __android_log_print(ANDROID_LOG_INFO, "Keypoints", "Finding keypoints");
         calcAndDrawKeyPointsForRealFace(frame_grey_rot, frame);
 
+
+        facePart = mainBodyPart;
     } else {
         bool secondaryBodyFound = false;
         for (size_t i = 0; i < allMainBodyParts.size() && !secondaryBodyFound; i++) {
@@ -235,13 +262,20 @@ void detectFace(cv::Mat frame_grey_rot, cv::Mat frame, bool backCamera) {
                 neededCountOfFindings = 1;
             }
 
-            if (currenctSecondaryBodyPart.size() >= neededCountOfFindings) { //at least two eyes are found
+            if (currenctSecondaryBodyPart.size() >=
+                neededCountOfFindings) { //at least two eyes are found
                 __android_log_print(ANDROID_LOG_INFO, "OpenCVCalls", "Eyes In Face Found. ");
                 mainBodyPart = currRect;
                 secondaryBodyFound = true;
                 mainBodyPartFound = true;
 
                 calcAndDrawKeyPointsForRealFace(frame_grey_rot, frame);
+
+                if (backCamera) {
+                    facePart = currRect;
+                } else {
+                    facePart = mainBodyPart;
+                }
             }
         }
 
@@ -286,10 +320,10 @@ void doTracking(cv::Mat frame_grey_rot, cv::Mat currentFrame) {
                 faceTrackingOffsetY += (newKeypoints[j].y - mainBodyKeypoints[j].y);
                 keypointsToSave.push_back(newKeypoints[j]);
                 __android_log_print(ANDROID_LOG_INFO, "OpenCVCalls", "rendering points");
-                ellipse(currentFrame,
+                /*ellipse(currentFrame,
                         cv::Point(newKeypoints[j].y, currentFrame.rows - newKeypoints[j].x),
                         cv::Size(5, 5), 0, 0, 360,
-                        cv::Scalar(1 * 10, 0, 0), 4, 8, 0);
+                        cv::Scalar(1 * 10, 0, 0), 4, 8, 0);*/
             } else if (c == 0) {
                 __android_log_print(ANDROID_LOG_INFO, "OpenCVCalls", "status is 0");
             }
@@ -306,14 +340,18 @@ void doTracking(cv::Mat frame_grey_rot, cv::Mat currentFrame) {
                                     mainBodyPart.y + (int) faceTrackingOffsetY, mainBodyPart.width,
                                     mainBodyPart.height);
 
-       /*     cv::Point center(mainBodyPart.y + mainBodyPart.height * 0.5,
-                             currentFrame.rows - mainBodyPart.x - mainBodyPart.width * 0.5);
-            ellipse(currentFrame, center, cv::Size(mainBodyPart.width * 0.5, mainBodyPart.height * 0.5), 0,
-                    0, 360,
-                    cv::Scalar(255, 0, 255), 4, 8, 0);*/
+            /*     cv::Point center(mainBodyPart.y + mainBodyPart.height * 0.5,
+                                  currentFrame.rows - mainBodyPart.x - mainBodyPart.width * 0.5);
+                 ellipse(currentFrame, center, cv::Size(mainBodyPart.width * 0.5, mainBodyPart.height * 0.5), 0,
+                         0, 360,
+                         cv::Scalar(255, 0, 255), 4, 8, 0);*/
 
             mainBodyPartTrackingOffset[0] += faceTrackingOffsetX;
             mainBodyPartTrackingOffset[1] += faceTrackingOffsetY;
+
+            facePart  = cv::Rect(facePart.x + (int) faceTrackingOffsetX,
+                                 facePart.y + (int) faceTrackingOffsetY, facePart.width,
+                                 facePart.height);
         }
         done = std::chrono::high_resolution_clock::now();
         evaluateKeypointsTime += std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -339,11 +377,11 @@ void calcAndDrawKeyPointsForRealFace(cv::Mat frame_grey_rot, cv::Mat currentFram
     cv::goodFeaturesToTrack(frame_grey_rot, tmpKeypoints, 100, 0.2, 0.2, mask);
 
     //render goodFeaturePoints
-    for (unsigned int k = 0; k < tmpKeypoints.size(); k++) {
+   /* for (unsigned int k = 0; k < tmpKeypoints.size(); k++) {
         ellipse(currentFrame, cv::Point(tmpKeypoints[k].y, currentFrame.rows - tmpKeypoints[k].x),
                 cv::Size(5, 5), 0, 0, 360,
                 cv::Scalar(255, 0, 0), 4, 8, 0);
-    }
+    }*/
 
     mainBodyKeypoints = tmpKeypoints;
 
@@ -384,46 +422,56 @@ void doCallLogging() {
     __android_log_print(ANDROID_LOG_INFO, "Timer", "Grab Cut Segmentation");
     __android_log_print(ANDROID_LOG_INFO, "Timer", "%f",
                         (grabCutTime / (float) grabCutCalls));
+    __android_log_print(ANDROID_LOG_INFO, "Timer", "NO Times Looking for face/body: %f",
+                        countKeypointsForMainBody);
     __android_log_print(ANDROID_LOG_INFO, "Timer", "*****************");
 }
 
 
-
-void doDeidentification(cv::Mat currentFrame) {
+void doDeidentification(cv::Mat currentFrame, cv::Mat frame_rot, jboolean useFilter) {
     // cv.GC_BGD, cv.GC_FGD, cv.GC_PR_BGD, cv.GC_PR_FGD, or simply pass 0,1,2,3 to image
-
     if (mainBodyPartFound) {
-        cv::Point transPoint;
-        for (int y = mainBodyPart.y-20; y < mainBodyPart.y + mainBodyPart.height+20; y++) {
-            for (int x = mainBodyPart.x-20; x < mainBodyPart.x + mainBodyPart.width+20; x++) {
-                unsigned char current = deIdentificationMask.at<unsigned char>(cv::Point(x-mainBodyPartTrackingOffset[0], y-mainBodyPartTrackingOffset[1]));
-
-                //http://answers.opencv.org/question/3031/smoothing-with-a-mask/
-                if (current == 1) {
-                    convert(x, y, currentFrame, transPoint);
-                    currentFrame.at<cv::Vec4b>(transPoint) = cv::Vec4b(rand() % 255, rand() % 255,  rand() % 255, 1);
-                }
-            }
-
+        auto started = std::chrono::high_resolution_clock::now();
+        cv::Mat blurMask;
+        if (useFilter) {
+            blurMask = cv::Mat::zeros(frame_rot.rows, frame_rot.cols, CV_8UC4);
+            frame_rot.copyTo(blurMask);
+            cv::medianBlur(blurMask, blurMask, 35);
         }
 
-        cv::Point center(mainBodyPart.y + mainBodyPart.height * 0.5,
-                         currentFrame.rows - mainBodyPart.x - mainBodyPart.width * 0.5);
-        ellipse(currentFrame, center, cv::Size(mainBodyPart.width * 0.5, mainBodyPart.height * 0.5), 0,
-                0, 360,
-                cv::Scalar(255, 0, 0), 4, 8, 0);
+        cv::Point transPoint;
+        for (int y = mainBodyPart.y; y < mainBodyPart.y + mainBodyPart.height; y++) {
+            for (int x = mainBodyPart.x; x < mainBodyPart.x + mainBodyPart.width; x++) {
+                unsigned char current = deIdentificationMask.at<unsigned char>(
+                        cv::Point(x - mainBodyPartTrackingOffset[0],
+                                  y - mainBodyPartTrackingOffset[1]));
+
+                if (current == 1 || current == 3) {
+                    convert(x, y, currentFrame, transPoint);
+                    if (useFilter) {
+                        currentFrame.at<cv::Vec4b>(transPoint) = blurMask.at<cv::Vec4b>(cv::Point(x,y));
+                    } else {
+                        currentFrame.at<cv::Vec4b>(transPoint) = cv::Vec4b(rand() % 255, rand() % 255,  rand() % 255, 1);
+                    }
+                }
+            }
+        }
+        auto done = std::chrono::high_resolution_clock::now();
+        deIdentificationTime += std::chrono::duration_cast<std::chrono::milliseconds>(
+                done - started).count();
+        deIdentificationCalls++;
     }
 }
 
 void recalculateDeidentification(cv::Mat frame_rot, cv::Mat frame) {
     if (mainBodyPartFound) {
         // cv.GC_BGD, cv.GC_FGD, cv.GC_PR_BGD, cv.GC_PR_FGD, or simply pass 0,1,2,3 to image
-        //cv::Rect bounds = realFace;
-        //bounds+= cv::Size(20, 20);
+        cv::Rect bounds = mainBodyPart;
+        bounds += cv::Size(90, 90);
         cv::Mat matRect = frame_rot;
         cv::cvtColor(matRect, matRect, CV_BGRA2BGR);
         cv::Mat result = cv::Mat::zeros(matRect.rows, matRect.cols, CV_8U); // all background
-        result(mainBodyPart) = 3; //cv.GC_PR_FGD
+        //result(bounds) = 3; //cv.GC_PR_FGD
         cv::Mat bgModel, fgModel; // the models (internally used)
 
         __android_log_print(ANDROID_LOG_INFO, "OpenCVCalls", "Calculating Faceboundaries");
@@ -435,8 +483,8 @@ void recalculateDeidentification(cv::Mat frame_rot, cv::Mat frame) {
                     result,
                     mainBodyPart,// rectangle containing foreground
                     bgModel, fgModel, // models
-                   1,        // number of iterations
-                    cv::GC_INIT_WITH_RECT ); // use rectangle
+                    1,        // number of iterations
+                    cv::GC_INIT_WITH_RECT); // use rectangle
         auto done = std::chrono::high_resolution_clock::now();
         grabCutTime += std::chrono::duration_cast<std::chrono::milliseconds>(
                 done - started).count();

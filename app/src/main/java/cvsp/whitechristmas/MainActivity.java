@@ -26,6 +26,7 @@ import android.view.Window;
 import android.view.WindowManager;
 import android.view.View.OnTouchListener;
 import android.view.SurfaceView;
+import android.widget.ImageView;
 
 public class MainActivity extends Activity implements OnTouchListener, CvCameraViewListener2 {
 
@@ -37,6 +38,10 @@ public class MainActivity extends Activity implements OnTouchListener, CvCameraV
     private OpencvCalls opencvCalls;
 
     private Boolean backCameraUsed = true;
+    private Boolean filterUsed = true;
+    private Boolean deIdentificationRunning = false;
+
+    private ImageView playButton;
 
     private BaseLoaderCallback mLoaderCallback = new BaseLoaderCallback(this) {
         @Override
@@ -62,6 +67,12 @@ public class MainActivity extends Activity implements OnTouchListener, CvCameraV
         System.loadLibrary("native-lib");
     }
 
+    private void setStop() {
+        mOpenCvCameraView.disableView();
+        deIdentificationRunning = false;
+        ((ImageView)playButton).setImageResource(R.drawable.play);
+    }
+
 
     /**
      * Called when the activity is first created.
@@ -73,6 +84,7 @@ public class MainActivity extends Activity implements OnTouchListener, CvCameraV
         requestWindowFeature(Window.FEATURE_NO_TITLE);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 
+        playButton = (ImageView) findViewById(R.id.playButton);
         setContentView(R.layout.activity_main);
 
 
@@ -111,7 +123,7 @@ public class MainActivity extends Activity implements OnTouchListener, CvCameraV
     public void switchCameraClicked(View view) {
 
         if (mOpenCvCameraView != null)
-            mOpenCvCameraView.disableView();
+            setStop();
 
         if (backCameraUsed) {
             mOpenCvCameraView.setCameraIndex(CameraBridgeViewBase.CAMERA_ID_BACK);
@@ -123,12 +135,28 @@ public class MainActivity extends Activity implements OnTouchListener, CvCameraV
         backCameraUsed = !backCameraUsed;
     }
 
+    public void switchDeidentification(View view) {
+        filterUsed = !filterUsed;
+
+    }
+
+    public void onStartClick(View v) {
+
+        if (!deIdentificationRunning) {
+            ((ImageView)v).setImageResource(R.drawable.stop);
+        }else {
+            ((ImageView)v).setImageResource(R.drawable.play);
+        }
+
+        deIdentificationRunning = !deIdentificationRunning;
+    }
+
 
     @Override
     public void onPause() {
         super.onPause();
         if (mOpenCvCameraView != null)
-            mOpenCvCameraView.disableView();
+            setStop();
     }
 
 
@@ -148,7 +176,7 @@ public class MainActivity extends Activity implements OnTouchListener, CvCameraV
     public void onDestroy() {
         super.onDestroy();
         if (mOpenCvCameraView != null)
-            mOpenCvCameraView.disableView();
+            setStop();
     }
 
 
@@ -170,7 +198,7 @@ public class MainActivity extends Activity implements OnTouchListener, CvCameraV
 
     public Mat onCameraFrame(CvCameraViewFrame inputFrame) {
             mRgba = inputFrame.rgba();
-            opencvCalls.faceDetection(mRgba.getNativeObjAddr(), backCameraUsed);
+            opencvCalls.faceDetection(mRgba.getNativeObjAddr(), backCameraUsed,filterUsed,deIdentificationRunning);
             return mRgba;
     }
 
