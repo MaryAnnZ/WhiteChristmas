@@ -33,8 +33,10 @@ void doTracking(cv::Mat frame_grey_rot, cv::Mat currentFrame);
 void calcAndDrawKeyPointsForRealFace(cv::Mat frame_grey_rot, cv::Mat currentFrame);
 
 cv::Rect realFace;
-cv::String face_cascade_name = "/storage/emulated/0/Download/haarcascade_frontalface_default.xml";
-cv::String eyes_cascade_name = "/storage/emulated/0/Download/haarcascade_eye.xml";
+//cv::String face_cascade_name = "/storage/emulated/0/Download/haarcascade_frontalface_default.xml";
+cv::String face_cascade_name = "/storage/emulated/0/Download/haarcascade_upperbody.xml";
+//cv::String eyes_cascade_name = "/storage/emulated/0/Download/haarcascade_eye.xml";
+cv::String eyes_cascade_name = "/storage/emulated/0/Download/haarcascade_frontalface_default.xml";
 bool faceCascadedLoaded = false;
 cv::CascadeClassifier face_cascade;
 cv::CascadeClassifier eyes_cascade;
@@ -134,10 +136,13 @@ void detectFace(cv::Mat frame_grey_rot, cv::Mat frame) {
     faceFound = false;
 
     if (!faceCascadedLoaded) {
-        if (!face_cascade.load(face_cascade_name) || !eyes_cascade.load(eyes_cascade_name)) {
+        if (!face_cascade.load(face_cascade_name) ) {
             __android_log_print(ANDROID_LOG_INFO, "OpenCVCalls",
-                                "Error loading face or eye cascade");
+                                "Error loading face cascade");
             return;
+        } else if (!eyes_cascade.load(eyes_cascade_name)) {
+            __android_log_print(ANDROID_LOG_INFO, "OpenCVCalls",
+                                "Error loading eye cascade");
         } else {
             faceCascadedLoaded = true;
         }
@@ -221,7 +226,7 @@ void detectFace(cv::Mat frame_grey_rot, cv::Mat frame) {
                                           0 | CV_HAAR_SCALE_IMAGE,
                                           cv::Size(30, 30));
 
-            if (currenctFaceEyes.size() >= 2) { //at least two eyes are found
+            if (currenctFaceEyes.size() >= 1) { //at least two eyes are found
                 __android_log_print(ANDROID_LOG_INFO, "OpenCVCalls", "Eyes In Face Found. ");
                 realFace = currRect;
                 eyesfound = true;
@@ -419,7 +424,7 @@ void recalculateDeidentification(cv::Mat frame_rot, cv::Mat frame) {
                     result,
                     realFace,// rectangle containing foreground
                     bgModel, fgModel, // models
-                    1,        // number of iterations
+                    5,        // number of iterations
                     cv::GC_INIT_WITH_RECT ); // use rectangle
         auto done = std::chrono::high_resolution_clock::now();
         grabCutTime += std::chrono::duration_cast<std::chrono::milliseconds>(
