@@ -21,7 +21,7 @@ Java_cvsp_whitechristmas_MainActivity_stringFromJNI(
 
 //for converting from android frame to usable one
 void convert(int x, int y, cv::Mat frame, cv::Point &oldPoint);
-
+void doCallLogging();
 void doDeidentification(cv::Mat currentFrame);
 
 void recalculateDeidentification(cv::Mat frame_rot, cv::Mat frame);
@@ -57,6 +57,8 @@ float faceDetectionTime = 0.0;
 int faceDetectionCalls = 0;
 float keypointFindingTime = 0.0;
 int keypointFindingCalls = 0;
+float grabCutTime = 0.0;
+int grabCutCalls = 0;
 
 float faceTrackingOffsetX = 0;
 float faceTrackingOffsetY = 0;
@@ -94,31 +96,23 @@ Java_cvsp_whitechristmas_OpencvCalls_faceDetection(JNIEnv *env, jclass type, jlo
     if (dumpedKeypoints < 0.15 && !faceTouched && faceFound) {
         //if enough keypoints where found, and no user input in current frame, do tracking
 
-        __android_log_print(ANDROID_LOG_INFO, "OpenCVCalls", "Track");
         doTracking(frame_gray_rot, frame);
 
-
-    } else { //do detection
-        __android_log_print(ANDROID_LOG_INFO, "OpenCVCalls", "Detect");
-        detectFace(frame_gray_rot, frame);
-
-        recalculateDeidentification(frame_rot, frame);
-
-        __android_log_print(ANDROID_LOG_INFO, "Timer", "preprocessing");
-        __android_log_print(ANDROID_LOG_INFO, "Timer", "%f",
-                            (preprocessTime / (float) preprocessCalls));
+        __android_log_print(ANDROID_LOG_INFO, "Timer", "*****************");
         __android_log_print(ANDROID_LOG_INFO, "Timer", "keypoint tracking");
         __android_log_print(ANDROID_LOG_INFO, "Timer", "%f",
                             (keypointTrackingTime / (float) keypointTrackingCalls));
         __android_log_print(ANDROID_LOG_INFO, "Timer", "keypoint evaluation");
         __android_log_print(ANDROID_LOG_INFO, "Timer", "%f",
                             (evaluateKeypointsTime / (float) evaluateKeypointsCalls));
-        __android_log_print(ANDROID_LOG_INFO, "Timer", "face detection");
-        __android_log_print(ANDROID_LOG_INFO, "Timer", "%f",
-                            (faceDetectionTime / (float) faceDetectionCalls));
-        __android_log_print(ANDROID_LOG_INFO, "Timer", "keypoint finding");
-        __android_log_print(ANDROID_LOG_INFO, "Timer", "%f",
-                            (keypointFindingTime / (float) keypointFindingCalls));
+        __android_log_print(ANDROID_LOG_INFO, "Timer", "*****************");
+
+    } else { //do detection
+
+        detectFace(frame_gray_rot, frame);
+        recalculateDeidentification(frame_rot, frame);
+
+        doCallLogging();
 
     }
 
@@ -126,7 +120,7 @@ Java_cvsp_whitechristmas_OpencvCalls_faceDetection(JNIEnv *env, jclass type, jlo
 }
 
 void detectFace(cv::Mat frame_grey_rot, cv::Mat frame) {
-
+    __android_log_print(ANDROID_LOG_INFO, "OpenCVCalls", "Detect");
     countKeypointsForFace = 0;
     faceKeypoints.clear();
     faceFound = false;
@@ -140,7 +134,6 @@ void detectFace(cv::Mat frame_grey_rot, cv::Mat frame) {
             faceCascadedLoaded = true;
         }
     }
-
 
     prevFrame = frame_grey_rot.clone();
 
@@ -239,6 +232,8 @@ void detectFace(cv::Mat frame_grey_rot, cv::Mat frame) {
 }
 
 void doTracking(cv::Mat frame_grey_rot, cv::Mat currentFrame) {
+    __android_log_print(ANDROID_LOG_INFO, "OpenCVCalls", "Track");
+
     std::vector<cv::Point2f> newKeypoints;
     std::vector<uchar> status;
     std::vector<float> error;
@@ -344,6 +339,30 @@ void convert(int x, int y, cv::Mat frame, cv::Point &oldPoint) {
     oldPoint.y = frame.rows - x;
 }
 
+void doCallLogging() {
+    __android_log_print(ANDROID_LOG_INFO, "Timer", "*****************");
+    __android_log_print(ANDROID_LOG_INFO, "Timer", "preprocessing");
+    __android_log_print(ANDROID_LOG_INFO, "Timer", "%f",
+                        (preprocessTime / (float) preprocessCalls));
+    __android_log_print(ANDROID_LOG_INFO, "Timer", "keypoint tracking");
+    __android_log_print(ANDROID_LOG_INFO, "Timer", "%f",
+                        (keypointTrackingTime / (float) keypointTrackingCalls));
+    __android_log_print(ANDROID_LOG_INFO, "Timer", "keypoint evaluation");
+    __android_log_print(ANDROID_LOG_INFO, "Timer", "%f",
+                        (evaluateKeypointsTime / (float) evaluateKeypointsCalls));
+    __android_log_print(ANDROID_LOG_INFO, "Timer", "face detection");
+    __android_log_print(ANDROID_LOG_INFO, "Timer", "%f",
+                        (faceDetectionTime / (float) faceDetectionCalls));
+    __android_log_print(ANDROID_LOG_INFO, "Timer", "keypoint finding");
+    __android_log_print(ANDROID_LOG_INFO, "Timer", "%f",
+                        (keypointFindingTime / (float) keypointFindingCalls));
+    __android_log_print(ANDROID_LOG_INFO, "Timer", "Grab Cut Segmentation");
+    __android_log_print(ANDROID_LOG_INFO, "Timer", "%f",
+                        (grabCutTime / (float) grabCutCalls));
+    __android_log_print(ANDROID_LOG_INFO, "Timer", "*****************");
+}
+
+
 
 void doDeidentification(cv::Mat currentFrame) {
     if (faceFound) {
@@ -352,6 +371,7 @@ void doDeidentification(cv::Mat currentFrame) {
             for (int x = realFace.x; x < realFace.x + realFace.width; x++) {
                 unsigned char current = deIdentificationMask.at<unsigned char>(cv::Point(x+faceTrackingOffsetX, y+faceTrackingOffsetY));
 
+                //http://answers.opencv.org/question/3031/smoothing-with-a-mask/
                 if (current == 1 || current == 3) {
                     convert(x, y, currentFrame, transPoint);
 
@@ -386,6 +406,8 @@ void recalculateDeidentification(cv::Mat frame_rot, cv::Mat frame) {
         cv::Mat bgModel, fgModel; // the models (internally used)
 
         __android_log_print(ANDROID_LOG_INFO, "OpenCVCalls", "Calculating Faceboundaries");
+        auto started = std::chrono::high_resolution_clock::now();
+
 
         // GrabCut segmentation
         cv::grabCut(matRect,    // input image = the rect with face
@@ -394,6 +416,10 @@ void recalculateDeidentification(cv::Mat frame_rot, cv::Mat frame) {
                     bgModel, fgModel, // models
                     1,        // number of iterations
                     cv::GC_INIT_WITH_RECT ); // use rectangle
+        auto done = std::chrono::high_resolution_clock::now();
+        grabCutTime += std::chrono::duration_cast<std::chrono::milliseconds>(
+                done - started).count();
+        grabCutCalls++;
 
         __android_log_print(ANDROID_LOG_INFO, "OpenCVCalls", "Done Calculating Faceboundaries");
 
