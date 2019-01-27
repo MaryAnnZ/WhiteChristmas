@@ -60,8 +60,7 @@ int keypointFindingCalls = 0;
 float grabCutTime = 0.0;
 int grabCutCalls = 0;
 
-float faceTrackingOffsetX = 0;
-float faceTrackingOffsetY = 0;
+std::vector<float> faceTrackingOffset; //offset since the beginning of tracking
 
 bool faceTouched = false;
 std::vector<int> faceLocation; //0 is x, 1 is y
@@ -72,14 +71,20 @@ int customFaceMaxY = -1;
 
 extern "C"
 JNIEXPORT void JNICALL
-Java_cvsp_whitechristmas_OpencvCalls_faceDetection(JNIEnv *env, jclass type, jlong addrRgba) {
+Java_cvsp_whitechristmas_OpencvCalls_faceDetection(JNIEnv *env, jclass type, jlong addrRgba, jboolean backCamera) {
     cv::Mat &frame = *(cv::Mat *) addrRgba;     //8UC4
 
     auto started = std::chrono::high_resolution_clock::now();
 
     cv::Mat frame_rot = frame;
     cv::Mat frame_gray_rot;
-    cv::rotate(frame_rot, frame_rot, cv::ROTATE_90_CLOCKWISE);
+
+    if (backCamera) {
+        cv::rotate(frame_rot, frame_rot, cv::ROTATE_90_CLOCKWISE);
+    } else {
+        cv::rotate(frame_rot, frame_rot, cv::ROTATE_90_COUNTERCLOCKWISE);
+    }
+
     cvtColor(frame_rot, frame_gray_rot, cv::COLOR_BGR2GRAY);
     cv::equalizeHist(frame_gray_rot, frame_gray_rot);
 
@@ -109,11 +114,14 @@ Java_cvsp_whitechristmas_OpencvCalls_faceDetection(JNIEnv *env, jclass type, jlo
 
     } else { //do detection
 
+        faceTrackingOffset.clear();
         detectFace(frame_gray_rot, frame);
         recalculateDeidentification(frame_rot, frame);
 
         doCallLogging();
 
+        faceTrackingOffset.push_back(0);
+        faceTrackingOffset.push_back(0);
     }
 
     doDeidentification(frame);
@@ -165,7 +173,7 @@ void detectFace(cv::Mat frame_grey_rot, cv::Mat frame) {
 
         faceLocation.clear();
         faceTouched = false;
-        //no face were found at the given location, check eye
+        //no face were found at the given location
         /*       if (!faceFound) {
                    faces.clear();
                    int x = std::min(customFaceMaxX,
@@ -251,8 +259,8 @@ void doTracking(cv::Mat frame_grey_rot, cv::Mat currentFrame) {
         keypointTrackingCalls++;
 
         keypointsToSave = std::vector<cv::Point2f>();
-        faceTrackingOffsetX = (float) 0.0;
-        faceTrackingOffsetY = (float) 0.0;
+        float faceTrackingOffsetX = (float) 0.0;
+        float faceTrackingOffsetY = (float) 0.0;
         int goodPixels = 0;
         started = std::chrono::high_resolution_clock::now();
         for (unsigned int j = 0; j < newKeypoints.size(); ++j) {
@@ -289,6 +297,9 @@ void doTracking(cv::Mat frame_grey_rot, cv::Mat currentFrame) {
             ellipse(currentFrame, center, cv::Size(realFace.width * 0.5, realFace.height * 0.5), 0,
                     0, 360,
                     cv::Scalar(255, 0, 255), 4, 8, 0);
+
+            faceTrackingOffset[0] += faceTrackingOffsetX;
+            faceTrackingOffset[1] += faceTrackingOffsetY;
         }
         done = std::chrono::high_resolution_clock::now();
         evaluateKeypointsTime += std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -367,30 +378,24 @@ void doCallLogging() {
 void doDeidentification(cv::Mat currentFrame) {
     if (faceFound) {
         cv::Point transPoint;
-        for (int y = realFace.y; y < realFace.y + realFace.height; y++) {
-            for (int x = realFace.x; x < realFace.x + realFace.width; x++) {
-                unsigned char current = deIdentificationMask.at<unsigned char>(cv::Point(x+faceTrackingOffsetX, y+faceTrackingOffsetY));
+        for (int y = realFace.y-20; y < realFace.y + realFace.height+20; y++) {
+            for (int x = realFace.x-20; x < realFace.x + realFace.width+20; x++) {
+                unsigned char current = deIdentificationMask.at<unsigned char>(cv::Point(x-faceTrackingOffset[0], y-faceTrackingOffset[1]));
 
                 //http://answers.opencv.org/question/3031/smoothing-with-a-mask/
                 if (current == 1 || current == 3) {
                     convert(x, y, currentFrame, transPoint);
-
-                    //if ((pow((x - center.x), 2) / pow(currRect.width, 2))  + (pow((y - center.y), 2) / pow(currRect.height, 2)) <1) {
-                    //<v::Point transPoint = convert(x, y, frame);
-
-                    //int grey = rand() % 255 + 10;
-                    //cv::Scalar intensity = frame.at<cv::Scalar>(transPoint);
-                    //intensity.val[0] = (int) rand() % 5 + (grey);
-                    //intensity.val[1] = (int) rand() % 5 + (grey);
-                    //intensity.val[2] = (int) rand() % 5 + (grey);
-
                     currentFrame.at<cv::Vec4b>(transPoint) = cv::Vec4b(rand() % 255, rand() % 255,  rand() % 255, 1);
                 }
             }
 
-            //for debugging
-            //ellipse(frame, convert(center.x,center.y,frame), cv::Size(currRect.height * 0.5, currRect.width * 0.5), 0, 0, 360,cv::Scalar(rand()%255, rand()%255, rand()%255),CV_FILLED);
         }
+
+        cv::Point center(realFace.y + realFace.height * 0.5,
+                         currentFrame.rows - realFace.x - realFace.width * 0.5);
+        ellipse(currentFrame, center, cv::Size(realFace.width * 0.5, realFace.height * 0.5), 0,
+                0, 360,
+                cv::Scalar(255, 0, 0), 4, 8, 0);
     }
 }
 

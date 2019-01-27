@@ -36,6 +36,8 @@ public class MainActivity extends Activity implements OnTouchListener, CvCameraV
     private CameraBridgeViewBase mOpenCvCameraView;
     private OpencvCalls opencvCalls;
 
+    private Boolean backCameraUsed = true;
+
     private BaseLoaderCallback mLoaderCallback = new BaseLoaderCallback(this) {
         @Override
         public void onManagerConnected(int status) {
@@ -106,6 +108,21 @@ public class MainActivity extends Activity implements OnTouchListener, CvCameraV
     }
 
 
+    public void switchCameraClicked(View view) {
+
+        if (mOpenCvCameraView != null)
+            mOpenCvCameraView.disableView();
+
+        if (backCameraUsed) {
+            mOpenCvCameraView.setCameraIndex(CameraBridgeViewBase.CAMERA_ID_BACK);
+        } else {
+            mOpenCvCameraView.setCameraIndex(CameraBridgeViewBase.CAMERA_ID_FRONT);
+        }
+
+        mLoaderCallback.onManagerConnected(LoaderCallbackInterface.SUCCESS);
+        backCameraUsed = !backCameraUsed;
+    }
+
 
     @Override
     public void onPause() {
@@ -153,7 +170,7 @@ public class MainActivity extends Activity implements OnTouchListener, CvCameraV
 
     public Mat onCameraFrame(CvCameraViewFrame inputFrame) {
             mRgba = inputFrame.rgba();
-            opencvCalls.faceDetection(mRgba.getNativeObjAddr());
+            opencvCalls.faceDetection(mRgba.getNativeObjAddr(), backCameraUsed);
             return mRgba;
     }
 
