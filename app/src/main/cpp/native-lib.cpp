@@ -58,6 +58,9 @@ int faceDetectionCalls = 0;
 float keypointFindingTime = 0.0;
 int keypointFindingCalls = 0;
 
+float faceTrackingOffsetX = 0;
+float faceTrackingOffsetY = 0;
+
 bool faceTouched = false;
 std::vector<int> faceLocation; //0 is x, 1 is y
 
@@ -253,8 +256,8 @@ void doTracking(cv::Mat frame_grey_rot, cv::Mat currentFrame) {
         keypointTrackingCalls++;
 
         keypointsToSave = std::vector<cv::Point2f>();
-        float offsetX = (float) 0.0;
-        float offsetY = (float) 0.0;
+        faceTrackingOffsetX = (float) 0.0;
+        faceTrackingOffsetY = (float) 0.0;
         int goodPixels = 0;
         started = std::chrono::high_resolution_clock::now();
         for (unsigned int j = 0; j < newKeypoints.size(); ++j) {
@@ -262,8 +265,8 @@ void doTracking(cv::Mat frame_grey_rot, cv::Mat currentFrame) {
             if (c == 1) {
 
                 goodPixels++;
-                offsetX += (newKeypoints[j].x - faceKeypoints[j].x);
-                offsetY += (newKeypoints[j].y - faceKeypoints[j].y);
+                faceTrackingOffsetX += (newKeypoints[j].x - faceKeypoints[j].x);
+                faceTrackingOffsetY += (newKeypoints[j].y - faceKeypoints[j].y);
                 keypointsToSave.push_back(newKeypoints[j]);
                 __android_log_print(ANDROID_LOG_INFO, "OpenCVCalls", "rendering points");
                 ellipse(currentFrame,
@@ -280,12 +283,12 @@ void doTracking(cv::Mat frame_grey_rot, cv::Mat currentFrame) {
             if (dumped > dumpedKeypoints) {
                 dumpedKeypoints = dumped;
             }
-            offsetX = offsetX / (float) goodPixels;
-            offsetY = offsetY / (float) goodPixels;
-            cv::Rect currentFace = realFace;
-            realFace = cv::Rect(currentFace.x + (int) offsetX,
-                                currentFace.y + (int) offsetY, currentFace.width,
-                                currentFace.height);
+            faceTrackingOffsetX = faceTrackingOffsetX / (float) goodPixels;
+            faceTrackingOffsetY = faceTrackingOffsetY / (float) goodPixels;
+            realFace = cv::Rect(realFace.x + (int) faceTrackingOffsetX,
+                                realFace.y + (int) faceTrackingOffsetY, realFace.width,
+                                realFace.height);
+
             cv::Point center(realFace.y + realFace.height * 0.5,
                              currentFrame.rows - realFace.x - realFace.width * 0.5);
             ellipse(currentFrame, center, cv::Size(realFace.width * 0.5, realFace.height * 0.5), 0,
@@ -347,8 +350,9 @@ void doDeidentification(cv::Mat currentFrame) {
         cv::Point transPoint;
         for (int y = realFace.y; y < realFace.y + realFace.height; y++) {
             for (int x = realFace.x; x < realFace.x + realFace.width; x++) {
-                unsigned char current = deIdentificationMask.at<unsigned char>(cv::Point(x, y));
-                if (current == 1 || current == 4) {
+                unsigned char current = deIdentificationMask.at<unsigned char>(cv::Point(x+faceTrackingOffsetX, y+faceTrackingOffsetY));
+
+                if (current == 1 || current == 3) {
                     convert(x, y, currentFrame, transPoint);
 
                     //if ((pow((x - center.x), 2) / pow(currRect.width, 2))  + (pow((y - center.y), 2) / pow(currRect.height, 2)) <1) {
@@ -372,9 +376,13 @@ void doDeidentification(cv::Mat currentFrame) {
 
 void recalculateDeidentification(cv::Mat frame_rot, cv::Mat frame) {
     if (faceFound) {
+
+        cv::Rect bounds = realFace;
+        bounds+= cv::Size(20, 20);
         cv::Mat matRect = frame_rot;
         cv::cvtColor(matRect, matRect, CV_BGRA2BGR);
-        cv::Mat result = cv::Mat::zeros(matRect.rows, matRect.cols, CV_8U); // all 0
+        cv::Mat result = cv::Mat::ones(matRect.rows, matRect.cols, CV_8U*2); // all 3
+        result(bounds) = 3;
         cv::Mat bgModel, fgModel; // the models (internally used)
 
         __android_log_print(ANDROID_LOG_INFO, "OpenCVCalls", "Calculating Faceboundaries");
@@ -385,7 +393,7 @@ void recalculateDeidentification(cv::Mat frame_rot, cv::Mat frame) {
                     realFace,// rectangle containing foreground
                     bgModel, fgModel, // models
                     1,        // number of iterations
-                    cv::GC_INIT_WITH_RECT); // use rectangle
+                    cv::GC_INIT_WITH_RECT ); // use rectangle
 
         __android_log_print(ANDROID_LOG_INFO, "OpenCVCalls", "Done Calculating Faceboundaries");
 
